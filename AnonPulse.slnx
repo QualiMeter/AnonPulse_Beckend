@@ -2,4 +2,7 @@
   <Folder Name="/backend/">
     <Project Path="backend/AnonPulse.Api/AnonPulse.Api.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AnonPulse.Api.Tests/AnonPulse.Api.Tests.csproj" />
+  </Folder>
 </Solution>
