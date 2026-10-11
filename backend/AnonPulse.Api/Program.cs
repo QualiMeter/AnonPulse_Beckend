@@ -1,7 +1,9 @@
 using Scalar.AspNetCore;
 using AnonPulse.Api.Data;
+using AnonPulse.Api.Development;
 using AnonPulse.Api.Models;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -9,21 +11,70 @@ var builder = WebApplication.CreateBuilder(args);
 // Регистрируем сервисы приложения
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
-var connectionString = builder.Configuration
-                           .GetConnectionString("DefaultConnection")
-                       ?? throw new InvalidOperationException(
-                           "Строка подключения к PostgreSQL не найдена.");
+builder.Services.AddAuthorization();
+builder.Services.AddDbContext<ApplicationDbContext>((serviceProvider, options) =>
+{
+    string connectionString = serviceProvider
+                                  .GetRequiredService<IConfiguration>()
+                                  .GetConnectionString("DefaultConnection")
+                              ?? throw new InvalidOperationException(
+                                  "Строка подключения к PostgreSQL не найдена.");
 
-builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseNpgsql(connectionString));
+    options.UseNpgsql(connectionString);
+});
 builder.Services
-    .AddIdentityCore<ApplicationUser>()
+    .AddIdentityCore<ApplicationUser>(options =>
+    {
+        options.User.RequireUniqueEmail = true;
+        options.Lockout.AllowedForNewUsers = true;
+        options.Lockout.MaxFailedAccessAttempts = 5;
+        options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
+    })
     .AddRoles<IdentityRole<Guid>>()
-    .AddEntityFrameworkStores<ApplicationDbContext>();
+    .AddEntityFrameworkStores<ApplicationDbContext>()
+    .AddSignInManager();
+builder.Services
+    .AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme = IdentityConstants.ApplicationScheme;
+        options.DefaultChallengeScheme = IdentityConstants.ApplicationScheme;
+        options.DefaultSignInScheme = IdentityConstants.ApplicationScheme;
+    })
+    .AddCookie(IdentityConstants.ApplicationScheme, options =>
+    {
+        options.Cookie.Name = "__Host-AnonPulse.Auth";
+        options.Cookie.HttpOnly = true;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+        options.Cookie.SameSite = SameSiteMode.Strict;
+        options.Cookie.Path = "/";
+        options.ExpireTimeSpan = TimeSpan.FromHours(8);
+        options.SlidingExpiration = true;
+        options.Events.OnRedirectToLogin = context =>
+            WriteAuthenticationProblemAsync(
+                context.HttpContext,
+                StatusCodes.Status401Unauthorized,
+                "Authentication is required.");
+        options.Events.OnRedirectToAccessDenied = context =>
+            WriteAuthenticationProblemAsync(
+                context.HttpContext,
+                StatusCodes.Status403Forbidden,
+                "Access is forbidden.");
+    });
 // Создаём приложение
 var app = builder.Build();
 
-// Документацию можно включить отдельно от Development
+
+var app = builder.Build();
+
+// Команда создания тестового преподавателя
+if (args.Contains("--create-development-teacher", StringComparer.Ordinal))
+{
+    await DevelopmentTeacherCreator.CreateAsync(app);
+    return;
+}
+
+// Документация API: доступна в Development
+// или при включении через переменную окружения
 bool enableApiDocs =
     app.Environment.IsDevelopment() ||
     app.Configuration.GetValue<bool>("ApiDocs:Enabled");
@@ -34,7 +85,7 @@ if (enableApiDocs)
     app.MapScalarApiReference();
 }
 
-// Тестовый эндпоинт — строго для разработки
+// Проверка БД доступна только в Development
 if (app.Environment.IsDevelopment())
 {
     app.MapGet("/dev/db-check", async (ApplicationDbContext db) =>
@@ -44,8 +95,10 @@ if (app.Environment.IsDevelopment())
     }).ExcludeFromDescription();
 }
 
+
 // Настраиваем HTTP pipeline
 app.UseHttpsRedirection();
+app.UseAuthentication();
 app.UseAuthorization();
 
 // Подключаем маршруты контроллеров
@@ -53,3 +106,22 @@ app.MapControllers();
 
 // Запускаем веб-сервер
 app.Run();
+
+static Task WriteAuthenticationProblemAsync(
+    HttpContext context,
+    int statusCode,
+    string title)
+{
+    context.Response.StatusCode = statusCode;
+
+    return context.Response.WriteAsJsonAsync(new ProblemDetails
+    {
+        Status = statusCode,
+        Title = title
+    },
+    options: null,
+    contentType: "application/problem+json",
+    cancellationToken: context.RequestAborted);
+}
+
+public partial class Program;
