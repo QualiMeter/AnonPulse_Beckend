@@ -63,25 +63,38 @@ builder.Services
 // Создаём приложение
 var app = builder.Build();
 
+
+var app = builder.Build();
+
+// Команда создания тестового преподавателя
 if (args.Contains("--create-development-teacher", StringComparer.Ordinal))
 {
     await DevelopmentTeacherCreator.CreateAsync(app);
     return;
 }
 
-// Документация API только для разработки
-if (app.Environment.IsDevelopment())
+// Документация API: доступна в Development
+// или при включении через переменную окружения
+bool enableApiDocs =
+    app.Environment.IsDevelopment() ||
+    app.Configuration.GetValue<bool>("ApiDocs:Enabled");
+
+if (enableApiDocs)
 {
     app.MapOpenApi();
     app.MapScalarApiReference();
+}
 
+// Проверка БД доступна только в Development
+if (app.Environment.IsDevelopment())
+{
     app.MapGet("/dev/db-check", async (ApplicationDbContext db) =>
     {
         bool connected = await db.Database.CanConnectAsync();
-
         return Results.Ok(new { connected });
     }).ExcludeFromDescription();
 }
+
 
 // Настраиваем HTTP pipeline
 app.UseHttpsRedirection();
