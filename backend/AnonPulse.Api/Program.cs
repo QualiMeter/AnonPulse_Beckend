@@ -64,8 +64,6 @@ builder.Services
 var app = builder.Build();
 
 
-var app = builder.Build();
-
 // Команда создания тестового преподавателя
 if (args.Contains("--create-development-teacher", StringComparer.Ordinal))
 {
