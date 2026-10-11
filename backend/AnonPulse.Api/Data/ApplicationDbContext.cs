@@ -1,5 +1,6 @@
 using AnonPulse.Api.Data.Configurations;
 using AnonPulse.Api.Models;
+using Microsoft.AspNetCore.DataProtection.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
@@ -7,7 +8,8 @@ using Microsoft.EntityFrameworkCore;
 namespace AnonPulse.Api.Data;
 
 public class ApplicationDbContext
-    : IdentityDbContext<ApplicationUser, IdentityRole<Guid>, Guid>
+    : IdentityDbContext<ApplicationUser, IdentityRole<Guid>, Guid>,
+        IDataProtectionKeyContext
 {
     public ApplicationDbContext(
         DbContextOptions<ApplicationDbContext> options)
@@ -24,6 +26,8 @@ public class ApplicationDbContext
     public DbSet<VoteParticipation> VoteParticipations => Set<VoteParticipation>();
 
     public DbSet<Decision> Decisions => Set<Decision>();
+
+    public DbSet<DataProtectionKey> DataProtectionKeys => Set<DataProtectionKey>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
