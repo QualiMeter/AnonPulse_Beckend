@@ -90,7 +90,7 @@ public sealed class PollEndpointsTests
     }
 
     [Fact]
-    public async Task Create_WithoutAuthentication_ReturnsUnauthorized()
+    public async Task PollEndpoints_WithoutAuthentication_ReturnUnauthorized()
     {
         await using var factory = new AuthWebApplicationFactory();
         using HttpClient client = factory.CreateHttpsClient();
@@ -98,13 +98,21 @@ public sealed class PollEndpointsTests
         HttpResponseMessage response = await client.PostAsJsonAsync(
             "/api/polls",
             ValidRequest());
+        HttpResponseMessage getResponse = await client.GetAsync("/api/polls");
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         Assert.Null(response.Headers.Location);
+        Assert.Equal(
+            "application/problem+json",
+            response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(HttpStatusCode.Unauthorized, getResponse.StatusCode);
+        Assert.Equal(
+            "application/problem+json",
+            getResponse.Content.Headers.ContentType?.MediaType);
     }
 
     [Fact]
-    public async Task Create_WithAdminRoleButWithoutTeacherRole_ReturnsForbidden()
+    public async Task PollEndpoints_WithAdminRoleButWithoutTeacherRole_ReturnForbidden()
     {
         await using var factory = new AuthWebApplicationFactory();
         SeededUser user = await factory.CreateUserAsync(
@@ -116,8 +124,16 @@ public sealed class PollEndpointsTests
         HttpResponseMessage response = await client.PostAsJsonAsync(
             "/api/polls",
             ValidRequest());
+        HttpResponseMessage getResponse = await client.GetAsync("/api/polls");
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(
+            "application/problem+json",
+            response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(HttpStatusCode.Forbidden, getResponse.StatusCode);
+        Assert.Equal(
+            "application/problem+json",
+            getResponse.Content.Headers.ContentType?.MediaType);
     }
 
     [Fact]
@@ -185,6 +201,18 @@ public sealed class PollEndpointsTests
 
         Assert.Equal(HttpStatusCode.BadRequest, malformedResponse.StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, emptyResponse.StatusCode);
+        Assert.Equal(
+            "application/problem+json",
+            malformedResponse.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(
+            "application/problem+json",
+            emptyResponse.Content.Headers.ContentType?.MediaType);
+
+        using IServiceScope scope = factory.Services.CreateScope();
+        ApplicationDbContext dbContext =
+            scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.Empty(dbContext.Polls);
+        Assert.Empty(dbContext.PollOptions);
     }
 
     private static async Task AssertInvalidRequestAsync(object request, string errorKey)
@@ -205,6 +233,12 @@ public sealed class PollEndpointsTests
         Assert.True(document.RootElement.GetProperty("errors").TryGetProperty(
             errorKey,
             out _));
+
+        using IServiceScope scope = factory.Services.CreateScope();
+        ApplicationDbContext dbContext =
+            scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.Empty(dbContext.Polls);
+        Assert.Empty(dbContext.PollOptions);
     }
 
     private static async Task<PollResponse> CreatePollAsync(
