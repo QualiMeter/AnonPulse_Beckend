@@ -2,6 +2,7 @@ using Scalar.AspNetCore;
 using AnonPulse.Api.Data;
 using AnonPulse.Api.Development;
 using AnonPulse.Api.Models;
+using AnonPulse.Api.Services.Polls;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -12,6 +13,8 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 builder.Services.AddAuthorization();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddScoped<IPollService, PollService>();
 builder.Services.AddDbContext<ApplicationDbContext>((serviceProvider, options) =>
 {
     string connectionString = serviceProvider
