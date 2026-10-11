@@ -1,4 +1,5 @@
 using Scalar.AspNetCore;
+using AnonPulse.Api.Bootstrap;
 using AnonPulse.Api.Data;
 using AnonPulse.Api.Development;
 using AnonPulse.Api.Models;
@@ -7,7 +8,28 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
-var builder = WebApplication.CreateBuilder(args);
+const string BootstrapInitialTeacherArgument = "--bootstrap-initial-teacher";
+const string CreateDevelopmentTeacherArgument = "--create-development-teacher";
+
+bool bootstrapInitialTeacher = args.Contains(
+    BootstrapInitialTeacherArgument,
+    StringComparer.Ordinal);
+bool createDevelopmentTeacher = args.Contains(
+    CreateDevelopmentTeacherArgument,
+    StringComparer.Ordinal);
+string[] applicationArguments = args
+    .Where(argument =>
+        !string.Equals(
+            argument,
+            BootstrapInitialTeacherArgument,
+            StringComparison.Ordinal) &&
+        !string.Equals(
+            argument,
+            CreateDevelopmentTeacherArgument,
+            StringComparison.Ordinal))
+    .ToArray();
+
+var builder = WebApplication.CreateBuilder(applicationArguments);
 
 // Регистрируем сервисы приложения
 builder.Services.AddControllers();
@@ -66,9 +88,23 @@ builder.Services
 // Создаём приложение
 var app = builder.Build();
 
+if (bootstrapInitialTeacher)
+{
+    try
+    {
+        await InitialTeacherBootstrapper.CreateAsync(app.Services, app.Configuration);
+    }
+    catch (Exception exception)
+    {
+        Console.Error.WriteLine($"Initial teacher bootstrap failed: {exception.Message}");
+        Environment.ExitCode = 1;
+    }
+
+    return;
+}
 
 // Команда создания тестового преподавателя
-if (args.Contains("--create-development-teacher", StringComparer.Ordinal))
+if (createDevelopmentTeacher)
 {
     await DevelopmentTeacherCreator.CreateAsync(app);
     return;
