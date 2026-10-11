@@ -23,16 +23,23 @@ builder.Services
 // Создаём приложение
 var app = builder.Build();
 
-// Документация API только для разработки
-if (app.Environment.IsDevelopment())
+// Документацию можно включить отдельно от Development
+bool enableApiDocs =
+    app.Environment.IsDevelopment() ||
+    app.Configuration.GetValue<bool>("ApiDocs:Enabled");
+
+if (enableApiDocs)
 {
     app.MapOpenApi();
     app.MapScalarApiReference();
+}
 
+// Тестовый эндпоинт — строго для разработки
+if (app.Environment.IsDevelopment())
+{
     app.MapGet("/dev/db-check", async (ApplicationDbContext db) =>
     {
         bool connected = await db.Database.CanConnectAsync();
-
         return Results.Ok(new { connected });
     }).ExcludeFromDescription();
 }
