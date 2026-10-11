@@ -1,5 +1,7 @@
 using Scalar.AspNetCore;
 using AnonPulse.Api.Data;
+using AnonPulse.Api.Models;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -14,6 +16,10 @@ var connectionString = builder.Configuration
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(connectionString));
+builder.Services
+    .AddIdentityCore<ApplicationUser>()
+    .AddRoles<IdentityRole<Guid>>()
+    .AddEntityFrameworkStores<ApplicationDbContext>();
 // Создаём приложение
 var app = builder.Build();
 
@@ -22,7 +28,7 @@ if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
     app.MapScalarApiReference();
-    
+
     app.MapGet("/dev/db-check", async (ApplicationDbContext db) =>
     {
         bool connected = await db.Database.CanConnectAsync();
