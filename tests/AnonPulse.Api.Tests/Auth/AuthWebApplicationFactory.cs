@@ -40,31 +40,44 @@ public sealed class AuthWebApplicationFactory : WebApplicationFactory<Program>
 
     public async Task<SeededUser> CreateTeacherAsync()
     {
+        return await CreateUserAsync(
+            $"teacher-{Guid.NewGuid()}@example.test",
+            RoleNames.Teacher);
+    }
+
+    public async Task<SeededUser> CreateUserAsync(
+        string email,
+        string? role = null)
+    {
         using IServiceScope scope = Services.CreateScope();
         RoleManager<IdentityRole<Guid>> roleManager =
             scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
         UserManager<ApplicationUser> userManager =
             scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
 
-        var role = new IdentityRole<Guid>(RoleNames.Teacher);
-        IdentityResult roleResult = await roleManager.CreateAsync(role);
-        Assert.True(roleResult.Succeeded, FormatErrors(roleResult));
+        if (role is not null && !await roleManager.RoleExistsAsync(role))
+        {
+            IdentityResult roleResult = await roleManager.CreateAsync(
+                new IdentityRole<Guid>(role));
+            Assert.True(roleResult.Succeeded, FormatErrors(roleResult));
+        }
 
         var user = new ApplicationUser
         {
             Id = Guid.NewGuid(),
-            Email = "teacher@example.test",
-            UserName = "teacher@example.test",
+            Email = email,
+            UserName = email,
             EmailConfirmed = true
         };
         const string password = "Teacher-password-123!";
         IdentityResult userResult = await userManager.CreateAsync(user, password);
         Assert.True(userResult.Succeeded, FormatErrors(userResult));
 
-        IdentityResult assignmentResult = await userManager.AddToRoleAsync(
-            user,
-            RoleNames.Teacher);
-        Assert.True(assignmentResult.Succeeded, FormatErrors(assignmentResult));
+        if (role is not null)
+        {
+            IdentityResult assignmentResult = await userManager.AddToRoleAsync(user, role);
+            Assert.True(assignmentResult.Succeeded, FormatErrors(assignmentResult));
+        }
 
         return new SeededUser(user.Id, user.Email, password);
     }
