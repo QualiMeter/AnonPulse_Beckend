@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/backend/">
+    <Project Path="backend/AnonPulse.Api/AnonPulse.Api.csproj" />
+  </Folder>
+</Solution>

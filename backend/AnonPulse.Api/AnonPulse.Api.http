@@ -1,0 +1,6 @@
+@AnonPulse.Api_HostAddress = http://localhost:5294
+
+GET {{AnonPulse.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

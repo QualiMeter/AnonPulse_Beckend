@@ -1,0 +1,22 @@
+# Secrets
+.env
+.env.*
+!.env.example
+**/appsettings.Local.json
+
+# .NET build artifacts
+**/bin/
+**/obj/
+
+# IDE
+.idea/
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Logs
+*.log
+
+# Local temporary files
+*.tmp
