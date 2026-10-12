@@ -6,7 +6,7 @@ public sealed class Poll
 
     public Guid CreatorId { get; set; }
 
-    public required string Question { get; set; }
+    public string? Title { get; set; }
 
     public PollStatus Status { get; set; } = PollStatus.Draft;
 
@@ -16,9 +16,11 @@ public sealed class Poll
 
     public DateTime? ClosedAt { get; set; }
 
+    public uint Version { get; set; }
+
     public ApplicationUser Creator { get; set; } = null!;
 
-    public ICollection<PollOption> Options { get; } = [];
+    public ICollection<PollQuestion> Questions { get; } = [];
 
     public ICollection<VoteParticipation> VoteParticipations { get; } = [];
 

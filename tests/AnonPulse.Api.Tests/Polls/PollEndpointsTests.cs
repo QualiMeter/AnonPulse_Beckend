@@ -39,6 +39,8 @@ public sealed class PollEndpointsTests
         Assert.Equal(DateTimeKind.Utc, poll.CreatedAt.Kind);
         Assert.Null(poll.PublishedAt);
         Assert.Null(poll.ClosedAt);
+        PollQuestionResponse legacyQuestion = Assert.Single(poll.Questions);
+        Assert.Equal(poll.Question, legacyQuestion.Text);
         Assert.Equal([0, 1, 2], poll.Options.Select(option => option.Position));
         Assert.Equal(
             ["Очный", "Дистанционный", "Гибридный"],
@@ -51,6 +53,79 @@ public sealed class PollEndpointsTests
         Assert.Equal(teacher.Id, storedPoll.CreatorId);
         Assert.Equal(PollStatus.Draft, storedPoll.Status);
         Assert.Equal(3, dbContext.PollOptions.Count());
+    }
+
+    [Fact]
+    public async Task Create_WithMultipleQuestions_ReturnsOrderedQuestionHierarchy()
+    {
+        await using var factory = new AuthWebApplicationFactory();
+        SeededUser teacher = await factory.CreateTeacherAsync();
+        using HttpClient client = factory.CreateHttpsClient();
+        await LoginAsync(client, teacher);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/polls",
+            new
+            {
+                Title = "  Обратная связь   по лекции ",
+                Questions = new object[]
+                {
+                    new
+                    {
+                        Text = " Насколько   понятен материал? ",
+                        Options = new[] { "Полностью", " Частично ", "Непонятен" }
+                    },
+                    new
+                    {
+                        Text = "Подходит ли темп занятий?",
+                        Options = new[] { "Да", "Нет" }
+                    }
+                }
+            });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        PollResponse? poll = await response.Content.ReadFromJsonAsync<PollResponse>();
+        Assert.NotNull(poll);
+        Assert.Equal("Обратная связь по лекции", poll.Title);
+        Assert.Equal("draft", poll.Status);
+        Assert.Equal([0, 1], poll.Questions.Select(question => question.Position));
+        Assert.Equal(
+            ["Насколько понятен материал?", "Подходит ли темп занятий?"],
+            poll.Questions.Select(question => question.Text));
+        Assert.Equal(
+            ["Полностью", "Частично", "Непонятен"],
+            poll.Questions[0].Options.Select(option => option.Text));
+        Assert.Equal([0, 1, 2], poll.Questions[0].Options.Select(option => option.Position));
+        Assert.Null(poll.Question);
+        Assert.Empty(poll.Options);
+
+        using IServiceScope scope = factory.Services.CreateScope();
+        ApplicationDbContext dbContext =
+            scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.Equal(2, dbContext.PollQuestions.Count());
+        Assert.Equal(5, dbContext.PollOptions.Count());
+    }
+
+    [Fact]
+    public async Task Create_WithoutQuestions_ReturnsValidationProblem()
+    {
+        await AssertInvalidRequestAsync(
+            new { Title = "No questions", Questions = Array.Empty<object>() },
+            "Questions");
+    }
+
+    [Fact]
+    public async Task Create_WithInvalidNestedQuestion_ReturnsValidationProblem()
+    {
+        await AssertInvalidRequestAsync(
+            new
+            {
+                Questions = new[]
+                {
+                    new { Text = " ", Options = new[] { "One", "ONE" } }
+                }
+            },
+            "Questions[0].Text");
     }
 
     [Fact]
@@ -178,6 +253,123 @@ public sealed class PollEndpointsTests
     }
 
     [Fact]
+    public async Task PublishAndClose_ValidDraft_UpdatesStatusAndUtcTimestamps()
+    {
+        await using var factory = new AuthWebApplicationFactory();
+        SeededUser teacher = await factory.CreateTeacherAsync();
+        using HttpClient client = factory.CreateHttpsClient();
+        await LoginAsync(client, teacher);
+        PollResponse draft = await CreatePollAsync(client, "Lifecycle poll");
+
+        HttpResponseMessage publishResponse =
+            await client.PostAsync($"/api/polls/{draft.Id}/publish", null);
+        PollResponse? open = await publishResponse.Content.ReadFromJsonAsync<PollResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, publishResponse.StatusCode);
+        Assert.NotNull(open);
+        Assert.Equal("open", open.Status);
+        Assert.NotNull(open.PublishedAt);
+        Assert.Equal(DateTimeKind.Utc, open.PublishedAt.Value.Kind);
+        Assert.Null(open.ClosedAt);
+
+        HttpResponseMessage closeResponse =
+            await client.PostAsync($"/api/polls/{draft.Id}/close", null);
+        PollResponse? closed = await closeResponse.Content.ReadFromJsonAsync<PollResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, closeResponse.StatusCode);
+        Assert.NotNull(closed);
+        Assert.Equal("closed", closed.Status);
+        Assert.Equal(open.PublishedAt, closed.PublishedAt);
+        Assert.NotNull(closed.ClosedAt);
+        Assert.Equal(DateTimeKind.Utc, closed.ClosedAt.Value.Kind);
+    }
+
+    [Fact]
+    public async Task StatusTransitions_WithInvalidState_ReturnConflictProblemDetails()
+    {
+        await using var factory = new AuthWebApplicationFactory();
+        SeededUser teacher = await factory.CreateTeacherAsync();
+        using HttpClient client = factory.CreateHttpsClient();
+        await LoginAsync(client, teacher);
+        PollResponse poll = await CreatePollAsync(client, "Conflict poll");
+
+        HttpResponseMessage closeDraftResponse =
+            await client.PostAsync($"/api/polls/{poll.Id}/close", null);
+        HttpResponseMessage publishResponse =
+            await client.PostAsync($"/api/polls/{poll.Id}/publish", null);
+        HttpResponseMessage republishResponse =
+            await client.PostAsync($"/api/polls/{poll.Id}/publish", null);
+
+        AssertConflict(closeDraftResponse);
+        Assert.Equal(HttpStatusCode.OK, publishResponse.StatusCode);
+        AssertConflict(republishResponse);
+    }
+
+    [Fact]
+    public async Task Publish_WithInvalidPersistedQuestionStructure_ReturnsConflict()
+    {
+        await using var factory = new AuthWebApplicationFactory();
+        SeededUser teacher = await factory.CreateTeacherAsync();
+        Guid invalidPollId = Guid.NewGuid();
+
+        using (IServiceScope scope = factory.Services.CreateScope())
+        {
+            ApplicationDbContext dbContext =
+                scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+            dbContext.Polls.Add(new Poll
+            {
+                Id = invalidPollId,
+                CreatorId = teacher.Id,
+                Title = "Invalid persisted poll",
+                Status = PollStatus.Draft,
+                CreatedAt = DateTime.UtcNow
+            });
+            await dbContext.SaveChangesAsync();
+        }
+
+        using HttpClient client = factory.CreateHttpsClient();
+        await LoginAsync(client, teacher);
+
+        HttpResponseMessage response =
+            await client.PostAsync($"/api/polls/{invalidPollId}/publish", null);
+
+        AssertConflict(response);
+    }
+
+    [Fact]
+    public async Task StatusTransitions_HideForeignPollButAllowAdministrator()
+    {
+        await using var factory = new AuthWebApplicationFactory();
+        SeededUser owner = await factory.CreateUserAsync(
+            "owner@example.test",
+            RoleNames.Teacher);
+        SeededUser otherTeacher = await factory.CreateUserAsync(
+            "other@example.test",
+            RoleNames.Teacher);
+        SeededUser admin = await factory.CreateUserAsync(
+            "admin-transition@example.test",
+            RoleNames.Admin);
+        using HttpClient ownerClient = factory.CreateHttpsClient();
+        using HttpClient otherClient = factory.CreateHttpsClient();
+        using HttpClient adminClient = factory.CreateHttpsClient();
+        await LoginAsync(ownerClient, owner);
+        await LoginAsync(otherClient, otherTeacher);
+        await LoginAsync(adminClient, admin);
+        PollResponse poll = await CreatePollAsync(ownerClient, "Owned poll");
+
+        HttpResponseMessage foreignResponse =
+            await otherClient.PostAsync($"/api/polls/{poll.Id}/publish", null);
+        HttpResponseMessage adminResponse =
+            await adminClient.PostAsync($"/api/polls/{poll.Id}/publish", null);
+
+        Assert.Equal(HttpStatusCode.NotFound, foreignResponse.StatusCode);
+        Assert.Equal("application/problem+json", foreignResponse.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(HttpStatusCode.OK, adminResponse.StatusCode);
+        PollResponse? published = await adminResponse.Content.ReadFromJsonAsync<PollResponse>();
+        Assert.Equal("open", published?.Status);
+    }
+
+    [Fact]
     public async Task Create_WithMalformedOrEmptyJson_ReturnsBadRequest()
     {
         await using var factory = new AuthWebApplicationFactory();
@@ -255,6 +447,14 @@ public sealed class PollEndpointsTests
     private static object ValidRequest()
     {
         return new { Question = "Question", Options = new[] { "One", "Two" } };
+    }
+
+    private static void AssertConflict(HttpResponseMessage response)
+    {
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal(
+            "application/problem+json",
+            response.Content.Headers.ContentType?.MediaType);
     }
 
     private static async Task LoginAsync(HttpClient client, SeededUser user)

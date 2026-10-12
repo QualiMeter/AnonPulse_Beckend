@@ -17,6 +17,30 @@ public interface IPollService
         Guid creatorId,
         Guid pollId,
         CancellationToken cancellationToken = default);
+
+    Task<PollTransitionResult> PublishAsync(
+        Guid actorId,
+        bool isAdmin,
+        Guid pollId,
+        CancellationToken cancellationToken = default);
+
+    Task<PollTransitionResult> CloseAsync(
+        Guid actorId,
+        bool isAdmin,
+        Guid pollId,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed record PollTransitionResult(
+    PollTransitionOutcome Outcome,
+    PollResponse? Poll = null,
+    string? Error = null);
+
+public enum PollTransitionOutcome
+{
+    Succeeded,
+    NotFound,
+    Conflict
 }
 
 public sealed record PollCreationResult(
