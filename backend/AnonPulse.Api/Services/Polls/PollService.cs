@@ -211,7 +211,7 @@ public sealed class PollService(
 
         if (usesNewFormat)
         {
-            IReadOnlyList<CreatePollQuestionRequest> requestedQuestions = request.Questions!;
+            IReadOnlyList<CreatePollQuestionRequest?> requestedQuestions = request.Questions!;
             if (requestedQuestions.Count == 0)
             {
                 errors[nameof(request.Questions)] = ["At least one question is required."];
@@ -219,7 +219,13 @@ public sealed class PollService(
 
             for (int index = 0; index < requestedQuestions.Count; index++)
             {
-                CreatePollQuestionRequest question = requestedQuestions[index];
+                CreatePollQuestionRequest? question = requestedQuestions[index];
+                if (question is null)
+                {
+                    errors[$"Questions[{index}]"] = ["Question must not be null."];
+                    continue;
+                }
+
                 questions.Add(ValidateQuestion(
                     question.Text,
                     question.Options,

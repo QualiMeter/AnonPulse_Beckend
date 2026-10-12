@@ -14,7 +14,7 @@ public sealed record CreatePollRequest
 
     public string? Title { get; init; }
 
-    public IReadOnlyList<CreatePollQuestionRequest>? Questions { get; init; }
+    public IReadOnlyList<CreatePollQuestionRequest?>? Questions { get; init; }
 
     public string? Question { get; init; }
 

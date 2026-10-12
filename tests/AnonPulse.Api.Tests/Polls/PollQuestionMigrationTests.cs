@@ -85,6 +85,7 @@ public sealed class PollQuestionMigrationTests : IAsyncLifetime
             .SingleAsync(candidate => candidate.Id == pollId);
         PollQuestion question = Assert.Single(poll.Questions);
 
+        Assert.Equal(pollId, poll.Id);
         Assert.Null(poll.Title);
         Assert.Equal(pollId, question.Id);
         Assert.Equal(pollId, question.PollId);
@@ -100,8 +101,13 @@ public sealed class PollQuestionMigrationTests : IAsyncLifetime
         Vote vote = await migratedContext.Votes.SingleAsync();
         Assert.Equal(voteId, vote.Id);
         Assert.Equal(firstOptionId, vote.OptionId);
-        Assert.Equal(participationId, (await migratedContext.VoteParticipations.SingleAsync()).Id);
-        Assert.Equal(decisionId, (await migratedContext.Decisions.SingleAsync()).Id);
+        VoteParticipation participation =
+            await migratedContext.VoteParticipations.SingleAsync();
+        Assert.Equal(participationId, participation.Id);
+        Assert.Equal(pollId, participation.PollId);
+        Decision decision = await migratedContext.Decisions.SingleAsync();
+        Assert.Equal(decisionId, decision.Id);
+        Assert.Equal(pollId, decision.PollId);
         Assert.Equal(userId, (await migratedContext.Users.SingleAsync()).Id);
     }
 }

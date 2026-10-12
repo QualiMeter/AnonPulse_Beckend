@@ -129,6 +129,48 @@ public sealed class PollEndpointsTests
     }
 
     [Fact]
+    public async Task Create_WithNullQuestionElement_ReturnsValidationProblem()
+    {
+        await AssertInvalidRequestAsync(
+            new { Questions = new object?[] { null } },
+            "Questions[0]");
+    }
+
+    [Fact]
+    public async Task Create_WithOtherMalformedNestedStructures_ReturnsBadRequest()
+    {
+        await using var factory = new AuthWebApplicationFactory();
+        SeededUser teacher = await factory.CreateTeacherAsync();
+        using HttpClient client = factory.CreateHttpsClient();
+        await LoginAsync(client, teacher);
+        string[] invalidPayloads =
+        [
+            """{"questions":[{"text":"Question","options":null}]}""",
+            """{"questions":[{"text":"Question","options":["One",null]}]}""",
+            """{"questions":[{"text":"Question","options":[{"text":"invalid"},"Two"]}]}""",
+            """{"questions":"not-an-array"}"""
+        ];
+
+        foreach (string payload in invalidPayloads)
+        {
+            using var content = new StringContent(payload, Encoding.UTF8, "application/json");
+            HttpResponseMessage response = await client.PostAsync("/api/polls", content);
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal(
+                "application/problem+json",
+                response.Content.Headers.ContentType?.MediaType);
+        }
+
+        using IServiceScope scope = factory.Services.CreateScope();
+        ApplicationDbContext dbContext =
+            scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.Empty(dbContext.Polls);
+        Assert.Empty(dbContext.PollQuestions);
+        Assert.Empty(dbContext.PollOptions);
+    }
+
+    [Fact]
     public async Task Create_WithOneOption_ReturnsValidationProblem()
     {
         await AssertInvalidRequestAsync(
@@ -404,6 +446,7 @@ public sealed class PollEndpointsTests
         ApplicationDbContext dbContext =
             scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         Assert.Empty(dbContext.Polls);
+        Assert.Empty(dbContext.PollQuestions);
         Assert.Empty(dbContext.PollOptions);
     }
 
