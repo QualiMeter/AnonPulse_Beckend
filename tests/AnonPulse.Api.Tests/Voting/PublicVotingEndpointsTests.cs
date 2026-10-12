@@ -253,10 +253,14 @@ public sealed class PublicVotingEndpointsTests : IAsyncLifetime
     public async Task ChangingUntrustedCookie_DoesNotBypassGlobalRateLimit()
     {
         SeededPoll poll = await SeedPollAsync(PollStatus.Open, [2]);
-        using HttpClient client = _factory.CreateHttpsClient(handleCookies: false);
+        await using var limitedFactory = CreateRateLimitedFactory(
+            globalLimit: 3,
+            sessionLimit: 2,
+            maxTrackedSessions: 10);
+        using HttpClient client = limitedFactory.CreateHttpsClient(handleCookies: false);
         VoteAnswerRequest[] answers = [new(poll.QuestionIds[0], poll.OptionIds[0][0])];
 
-        for (int requestNumber = 0; requestNumber < 30; requestNumber++)
+        for (int requestNumber = 0; requestNumber < 3; requestNumber++)
         {
             using HttpRequestMessage request = CreateVoteRequest(poll.Id, answers);
             request.Headers.Add(
@@ -274,6 +278,107 @@ public sealed class PublicVotingEndpointsTests : IAsyncLifetime
 
         Assert.Equal(HttpStatusCode.TooManyRequests, limitedResponse.StatusCode);
         await AssertStoredCountsAsync(poll.Id, 0, 0);
+    }
+
+    [Fact]
+    public async Task ValidSessions_HaveIndependentLimits()
+    {
+        SeededPoll poll = await SeedPollAsync(PollStatus.Open, [2]);
+        await using var limitedFactory = CreateRateLimitedFactory(
+            globalLimit: 10,
+            sessionLimit: 2,
+            maxTrackedSessions: 10);
+        using HttpClient firstClient = limitedFactory.CreateHttpsClient();
+        using HttpClient secondClient = limitedFactory.CreateHttpsClient();
+        await firstClient.GetAsync($"/api/public/polls/{poll.Id}");
+        await secondClient.GetAsync($"/api/public/polls/{poll.Id}");
+        var invalidRequest = new SubmitVotesRequest([]);
+
+        Assert.Equal(HttpStatusCode.BadRequest, (await VoteAsync(
+            firstClient, poll.Id, invalidRequest)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await VoteAsync(
+            firstClient, poll.Id, invalidRequest)).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await VoteAsync(
+            firstClient, poll.Id, invalidRequest)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await VoteAsync(
+            secondClient, poll.Id, invalidRequest)).StatusCode);
+    }
+
+    [Fact]
+    public async Task ConcurrentRequests_AreLimitedPerValidatedSession()
+    {
+        SeededPoll poll = await SeedPollAsync(PollStatus.Open, [2]);
+        await using var limitedFactory = CreateRateLimitedFactory(
+            globalLimit: 10,
+            sessionLimit: 2,
+            maxTrackedSessions: 10);
+        using HttpClient client = limitedFactory.CreateHttpsClient();
+        await client.GetAsync($"/api/public/polls/{poll.Id}");
+        var invalidRequest = new SubmitVotesRequest([]);
+
+        HttpResponseMessage[] responses = await Task.WhenAll(
+            Enumerable.Range(0, 5)
+                .Select(_ => VoteAsync(client, poll.Id, invalidRequest)));
+
+        Assert.Equal(2, responses.Count(item => item.StatusCode == HttpStatusCode.BadRequest));
+        Assert.Equal(3, responses.Count(item => item.StatusCode == HttpStatusCode.TooManyRequests));
+    }
+
+    [Fact]
+    public async Task GlobalLimit_ProtectsAgainstConcurrentSessionRotation()
+    {
+        SeededPoll poll = await SeedPollAsync(PollStatus.Open, [2]);
+        await using var limitedFactory = CreateRateLimitedFactory(
+            globalLimit: 5,
+            sessionLimit: 5,
+            maxTrackedSessions: 20);
+        HttpClient[] clients = Enumerable.Range(0, 10)
+            .Select(_ => limitedFactory.CreateHttpsClient())
+            .ToArray();
+        try
+        {
+            await Task.WhenAll(clients.Select(client =>
+                client.GetAsync($"/api/public/polls/{poll.Id}")));
+            var invalidRequest = new SubmitVotesRequest([]);
+
+            HttpResponseMessage[] responses = await Task.WhenAll(
+                clients.Select(client => VoteAsync(client, poll.Id, invalidRequest)));
+
+            Assert.Equal(5, responses.Count(item => item.StatusCode == HttpStatusCode.BadRequest));
+            Assert.Equal(5, responses.Count(item => item.StatusCode == HttpStatusCode.TooManyRequests));
+        }
+        finally
+        {
+            foreach (HttpClient client in clients)
+            {
+                client.Dispose();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task SessionPartitionStorage_IsBounded()
+    {
+        SeededPoll poll = await SeedPollAsync(PollStatus.Open, [2]);
+        await using var limitedFactory = CreateRateLimitedFactory(
+            globalLimit: 10,
+            sessionLimit: 2,
+            maxTrackedSessions: 2);
+        using HttpClient firstClient = limitedFactory.CreateHttpsClient();
+        using HttpClient secondClient = limitedFactory.CreateHttpsClient();
+        using HttpClient thirdClient = limitedFactory.CreateHttpsClient();
+        await Task.WhenAll(
+            firstClient.GetAsync($"/api/public/polls/{poll.Id}"),
+            secondClient.GetAsync($"/api/public/polls/{poll.Id}"),
+            thirdClient.GetAsync($"/api/public/polls/{poll.Id}"));
+        var invalidRequest = new SubmitVotesRequest([]);
+
+        Assert.Equal(HttpStatusCode.BadRequest, (await VoteAsync(
+            firstClient, poll.Id, invalidRequest)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await VoteAsync(
+            secondClient, poll.Id, invalidRequest)).StatusCode);
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await VoteAsync(
+            thirdClient, poll.Id, invalidRequest)).StatusCode);
     }
 
     [Fact]
@@ -402,6 +507,32 @@ public sealed class PublicVotingEndpointsTests : IAsyncLifetime
     {
         return client.SendAsync(CreateVoteRequest(pollId, answers));
     }
+
+    private static Task<HttpResponseMessage> VoteAsync(
+        HttpClient client,
+        Guid pollId,
+        SubmitVotesRequest request)
+    {
+        var message = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/public/polls/{pollId}/votes");
+        message.Headers.Add("X-AnonPulse-Vote", "1");
+        message.Content = JsonContent.Create(request);
+        return client.SendAsync(message);
+    }
+
+    private PublicVotingWebApplicationFactory CreateRateLimitedFactory(
+        int globalLimit,
+        int sessionLimit,
+        int maxTrackedSessions) =>
+        new(
+            _postgres.GetConnectionString(),
+            new Dictionary<string, string?>
+            {
+                ["AnonymousVoting:GlobalRequestsPerWindow"] = globalLimit.ToString(),
+                ["AnonymousVoting:SessionRequestsPerWindow"] = sessionLimit.ToString(),
+                ["AnonymousVoting:MaxTrackedSessions"] = maxTrackedSessions.ToString()
+            });
 
     private async Task AssertStoredCountsAsync(
         Guid pollId,

@@ -12,7 +12,8 @@ namespace AnonPulse.Api.Controllers;
 [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
 public sealed class PublicPollsController(
     IPublicVotingService votingService,
-    IAnonymousVoterTokenService tokenService) : ControllerBase
+    IAnonymousVoterTokenService tokenService,
+    IAnonymousVotingSessionRateLimiter sessionRateLimiter) : ControllerBase
 {
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<PublicPollResponse>> GetById(
@@ -57,6 +58,19 @@ public sealed class PublicPollsController(
                 ["VotingSession"] =
                     ["A valid voting session is required. Open the poll before voting."]
             });
+        }
+
+        VotingRateLimitDecision rateLimit = sessionRateLimiter.TryAcquire(token);
+        if (!rateLimit.IsAllowed)
+        {
+            int retryAfterSeconds = Math.Max(
+                1,
+                (int)Math.Ceiling(rateLimit.RetryAfter.TotalSeconds));
+            Response.Headers.RetryAfter = retryAfterSeconds.ToString();
+            return Problem(
+                statusCode: StatusCodes.Status429TooManyRequests,
+                title: "Too many vote submissions.",
+                detail: rateLimit.Reason);
         }
 
         string tokenHash = tokenService.ComputePollScopedHash(id, token);
