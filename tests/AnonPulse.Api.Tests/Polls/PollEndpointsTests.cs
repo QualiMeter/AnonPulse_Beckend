@@ -280,6 +280,7 @@ public sealed class PollEndpointsTests
         Assert.Equal(HttpStatusCode.OK, listResponse.StatusCode);
         Assert.NotNull(polls);
         Assert.Equal([newestFirstPoll.Id, firstPoll.Id], polls.Select(poll => poll.Id));
+        Assert.All(polls, poll => Assert.Equal("draft", poll.Status));
 
         HttpResponseMessage ownResponse =
             await firstClient.GetAsync($"/api/polls/{firstPoll.Id}");
@@ -287,6 +288,7 @@ public sealed class PollEndpointsTests
             await ownResponse.Content.ReadFromJsonAsync<PollResponse>();
         Assert.Equal(HttpStatusCode.OK, ownResponse.StatusCode);
         Assert.NotNull(ownPoll);
+        Assert.Equal("draft", ownPoll.Status);
         Assert.Equal([0, 1], ownPoll.Options.Select(option => option.Position));
 
         HttpResponseMessage foreignResponse =
