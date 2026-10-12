@@ -4,10 +4,12 @@ using AnonPulse.Api.Data;
 using AnonPulse.Api.Development;
 using AnonPulse.Api.Models;
 using AnonPulse.Api.Services.Polls;
+using AnonPulse.Api.Services.Voting;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Threading.RateLimiting;
 
 const string BootstrapInitialTeacherArgument = "--bootstrap-initial-teacher";
 const string BootstrapAdminArgument = "--bootstrap-admin";
@@ -46,6 +48,49 @@ builder.Services.AddOpenApi();
 builder.Services.AddAuthorization();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IPollService, PollService>();
+builder.Services.AddScoped<IPublicVotingService, PublicVotingService>();
+builder.Services.AddSingleton<IAnonymousVoterTokenService, AnonymousVoterTokenService>();
+builder.Services.AddSingleton<IAnonymousVotingSessionRateLimiter,
+    AnonymousVotingSessionRateLimiter>();
+builder.Services.AddOptions<AnonymousVoterOptions>()
+    .Bind(builder.Configuration.GetSection(AnonymousVoterOptions.SectionName))
+    .Validate(options => options.CookieName.StartsWith("__Host-", StringComparison.Ordinal),
+        "Anonymous voting cookie name must use the __Host- prefix.")
+    .Validate(options => options.CookieLifetime > TimeSpan.Zero,
+        "Anonymous voting cookie lifetime must be greater than zero.")
+    .Validate(options => options.TimestampPrecision > TimeSpan.Zero,
+        "Anonymous voting timestamp precision must be greater than zero.")
+    .Validate(options => options.RateLimitWindow > TimeSpan.Zero,
+        "Anonymous voting rate-limit window must be greater than zero.")
+    .Validate(options => options.SessionRequestsPerWindow > 0,
+        "Anonymous session rate limit must be greater than zero.")
+    .Validate(options => options.GlobalRequestsPerWindow >=
+                         options.SessionRequestsPerWindow,
+        "Global voting rate limit must not be lower than the session limit.")
+    .Validate(options => options.MaxTrackedSessions > 0,
+        "Maximum tracked anonymous sessions must be greater than zero.")
+    .Validate(options => options.SessionTrackingRetention >= options.RateLimitWindow,
+        "Session tracking retention must not be shorter than the rate-limit window.")
+    .ValidateOnStart();
+builder.Services.AddRateLimiter(rateLimiterOptions =>
+{
+    int permitLimit = builder.Configuration.GetValue<int?>(
+        $"{AnonymousVoterOptions.SectionName}:GlobalRequestsPerWindow") ?? 600;
+    TimeSpan window = builder.Configuration.GetValue<TimeSpan?>(
+        $"{AnonymousVoterOptions.SectionName}:RateLimitWindow") ??
+        TimeSpan.FromMinutes(1);
+    rateLimiterOptions.AddPolicy("public-voting", _ =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            "public-voting-global",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = permitLimit,
+                Window = window,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+    rateLimiterOptions.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+});
 builder.Services
     .AddDataProtection()
     .SetApplicationName("AnonPulse")
@@ -163,6 +208,7 @@ if (app.Environment.IsDevelopment())
 
 // Настраиваем HTTP pipeline
 app.UseHttpsRedirection();
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
