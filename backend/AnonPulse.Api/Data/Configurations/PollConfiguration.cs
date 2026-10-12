@@ -18,10 +18,9 @@ public sealed class PollConfiguration : IEntityTypeConfiguration<Poll>
 
         builder.Property(poll => poll.Id).HasColumnName("id");
         builder.Property(poll => poll.CreatorId).HasColumnName("creator_id");
-        builder.Property(poll => poll.Question)
-            .HasColumnName("question")
-            .HasColumnType("text")
-            .IsRequired();
+        builder.Property(poll => poll.Title)
+            .HasColumnName("title")
+            .HasColumnType("text");
         builder.Property(poll => poll.Status)
             .HasColumnName("status")
             .HasMaxLength(6)
@@ -37,6 +36,9 @@ public sealed class PollConfiguration : IEntityTypeConfiguration<Poll>
         builder.Property(poll => poll.ClosedAt)
             .HasColumnName("closed_at")
             .HasColumnType("timestamp with time zone");
+        builder.Property(poll => poll.Version)
+            .HasColumnName("xmin")
+            .IsRowVersion();
 
         builder.HasOne(poll => poll.Creator)
             .WithMany(user => user.Polls)

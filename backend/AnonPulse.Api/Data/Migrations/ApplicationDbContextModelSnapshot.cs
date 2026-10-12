@@ -145,16 +145,21 @@ namespace AnonPulse.Api.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("published_at");
 
-                    b.Property<string>("Question")
-                        .IsRequired()
-                        .HasColumnType("text")
-                        .HasColumnName("question");
-
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(6)
                         .HasColumnType("character varying(6)")
                         .HasColumnName("status");
+
+                    b.Property<string>("Title")
+                        .HasColumnType("text")
+                        .HasColumnName("title");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.HasKey("Id");
 
@@ -167,6 +172,42 @@ namespace AnonPulse.Api.Data.Migrations
                 });
 
             modelBuilder.Entity("AnonPulse.Api.Models.PollOption", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("integer")
+                        .HasColumnName("position");
+
+                    b.Property<Guid>("QuestionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("question_id");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("QuestionId");
+
+                    b.HasIndex("QuestionId", "Position")
+                        .IsUnique()
+                        .HasDatabaseName("ux_poll_options_question_id_position");
+
+                    b.ToTable("poll_options", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_poll_options_position_nonnegative", "position >= 0");
+
+                            t.HasCheckConstraint("ck_poll_options_text_not_blank", "btrim(text) <> ''");
+                        });
+                });
+
+            modelBuilder.Entity("AnonPulse.Api.Models.PollQuestion", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -190,7 +231,16 @@ namespace AnonPulse.Api.Data.Migrations
 
                     b.HasIndex("PollId");
 
-                    b.ToTable("poll_options", (string)null);
+                    b.HasIndex("PollId", "Position")
+                        .IsUnique()
+                        .HasDatabaseName("ux_poll_questions_poll_id_position");
+
+                    b.ToTable("poll_questions", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_poll_questions_position_nonnegative", "position >= 0");
+
+                            t.HasCheckConstraint("ck_poll_questions_text_not_blank", "btrim(text) <> ''");
+                        });
                 });
 
             modelBuilder.Entity("AnonPulse.Api.Models.Vote", b =>
@@ -432,8 +482,19 @@ namespace AnonPulse.Api.Data.Migrations
 
             modelBuilder.Entity("AnonPulse.Api.Models.PollOption", b =>
                 {
-                    b.HasOne("AnonPulse.Api.Models.Poll", "Poll")
+                    b.HasOne("AnonPulse.Api.Models.PollQuestion", "Question")
                         .WithMany("Options")
+                        .HasForeignKey("QuestionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Question");
+                });
+
+            modelBuilder.Entity("AnonPulse.Api.Models.PollQuestion", b =>
+                {
+                    b.HasOne("AnonPulse.Api.Models.Poll", "Poll")
+                        .WithMany("Questions")
                         .HasForeignKey("PollId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
@@ -525,7 +586,7 @@ namespace AnonPulse.Api.Data.Migrations
                 {
                     b.Navigation("Decision");
 
-                    b.Navigation("Options");
+                    b.Navigation("Questions");
 
                     b.Navigation("VoteParticipations");
                 });
@@ -533,6 +594,11 @@ namespace AnonPulse.Api.Data.Migrations
             modelBuilder.Entity("AnonPulse.Api.Models.PollOption", b =>
                 {
                     b.Navigation("Votes");
+                });
+
+            modelBuilder.Entity("AnonPulse.Api.Models.PollQuestion", b =>
+                {
+                    b.Navigation("Options");
                 });
 #pragma warning restore 612, 618
         }
