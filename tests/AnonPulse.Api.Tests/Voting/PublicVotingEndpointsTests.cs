@@ -225,7 +225,7 @@ public sealed class PublicVotingEndpointsTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task StoredVotes_HaveNoIdentityLinkAndUseCoarsenedUtcTimestamps()
+    public async Task StoredVotes_HaveNoIdentityLinkOrSubmissionTimestamp()
     {
         SeededPoll poll = await SeedPollAsync(PollStatus.Open, [2]);
         using HttpClient client = _factory.CreateHttpsClient();
@@ -239,14 +239,41 @@ public sealed class PublicVotingEndpointsTests : IAsyncLifetime
         VoteParticipation participation =
             await db.VoteParticipations.SingleAsync(item => item.PollId == poll.Id);
 
-        Assert.Equal(DateTimeKind.Utc, vote.CreatedAt.Kind);
-        Assert.Equal(0, vote.CreatedAt.Minute);
-        Assert.Equal(0, vote.CreatedAt.Second);
-        Assert.Equal(vote.CreatedAt, participation.UsedAt);
+        Assert.Null(vote.CreatedAt);
+        Assert.Equal(DateTimeKind.Utc, participation.UsedAt.Kind);
+        Assert.Equal(0, participation.UsedAt.Minute);
+        Assert.Equal(0, participation.UsedAt.Second);
         Assert.DoesNotContain(
             typeof(Vote).GetProperties(),
             property => property.Name.Contains("User", StringComparison.OrdinalIgnoreCase) ||
                         property.Name.Contains("Participation", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ChangingUntrustedCookie_DoesNotBypassGlobalRateLimit()
+    {
+        SeededPoll poll = await SeedPollAsync(PollStatus.Open, [2]);
+        using HttpClient client = _factory.CreateHttpsClient(handleCookies: false);
+        VoteAnswerRequest[] answers = [new(poll.QuestionIds[0], poll.OptionIds[0][0])];
+
+        for (int requestNumber = 0; requestNumber < 30; requestNumber++)
+        {
+            using HttpRequestMessage request = CreateVoteRequest(poll.Id, answers);
+            request.Headers.Add(
+                "Cookie",
+                $"__Host-AnonPulse.Voter=untrusted-{Guid.NewGuid():N}");
+            HttpResponseMessage response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
+
+        using HttpRequestMessage limitedRequest = CreateVoteRequest(poll.Id, answers);
+        limitedRequest.Headers.Add(
+            "Cookie",
+            $"__Host-AnonPulse.Voter=untrusted-{Guid.NewGuid():N}");
+        HttpResponseMessage limitedResponse = await client.SendAsync(limitedRequest);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, limitedResponse.StatusCode);
+        await AssertStoredCountsAsync(poll.Id, 0, 0);
     }
 
     [Fact]

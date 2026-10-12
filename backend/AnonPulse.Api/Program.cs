@@ -9,8 +9,6 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using System.Security.Cryptography;
-using System.Text;
 using System.Threading.RateLimiting;
 
 const string BootstrapInitialTeacherArgument = "--bootstrap-initial-teacher";
@@ -67,29 +65,16 @@ builder.Services.AddRateLimiter(rateLimiterOptions =>
 {
     int permitLimit = builder.Configuration.GetValue<int?>(
         $"{AnonymousVoterOptions.SectionName}:RequestsPerMinute") ?? 30;
-    rateLimiterOptions.AddPolicy("public-voting", httpContext =>
-    {
-        string cookieName = builder.Configuration.GetValue<string>(
-            $"{AnonymousVoterOptions.SectionName}:CookieName") ??
-            "__Host-AnonPulse.Voter";
-        string partitionKey = httpContext.Request.Cookies.TryGetValue(
-                cookieName,
-                out string? protectedCookie) &&
-            !string.IsNullOrEmpty(protectedCookie)
-                ? Convert.ToHexStringLower(SHA256.HashData(
-                    Encoding.UTF8.GetBytes(protectedCookie)))
-                : httpContext.Connection.RemoteIpAddress?.ToString() ?? "missing-session";
-
-        return RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey,
+    rateLimiterOptions.AddPolicy("public-voting", _ =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            "public-voting-global",
             _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = permitLimit,
                 Window = TimeSpan.FromMinutes(1),
                 QueueLimit = 0,
                 AutoReplenishment = true
-            });
-    });
+            }));
     rateLimiterOptions.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 });
 builder.Services

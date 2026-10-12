@@ -96,7 +96,7 @@ public sealed class PublicVotingService(
                 {
                     Id = Guid.NewGuid(),
                     OptionId = answer.OptionId,
-                    CreatedAt = storedTime
+                    CreatedAt = null
                 });
             }
 
