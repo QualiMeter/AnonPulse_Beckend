@@ -4,10 +4,14 @@ using AnonPulse.Api.Data;
 using AnonPulse.Api.Development;
 using AnonPulse.Api.Models;
 using AnonPulse.Api.Services.Polls;
+using AnonPulse.Api.Services.Voting;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading.RateLimiting;
 
 const string BootstrapInitialTeacherArgument = "--bootstrap-initial-teacher";
 const string BootstrapAdminArgument = "--bootstrap-admin";
@@ -46,6 +50,48 @@ builder.Services.AddOpenApi();
 builder.Services.AddAuthorization();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IPollService, PollService>();
+builder.Services.AddScoped<IPublicVotingService, PublicVotingService>();
+builder.Services.AddSingleton<IAnonymousVoterTokenService, AnonymousVoterTokenService>();
+builder.Services.AddOptions<AnonymousVoterOptions>()
+    .Bind(builder.Configuration.GetSection(AnonymousVoterOptions.SectionName))
+    .Validate(options => options.CookieName.StartsWith("__Host-", StringComparison.Ordinal),
+        "Anonymous voting cookie name must use the __Host- prefix.")
+    .Validate(options => options.CookieLifetime > TimeSpan.Zero,
+        "Anonymous voting cookie lifetime must be greater than zero.")
+    .Validate(options => options.TimestampPrecision > TimeSpan.Zero,
+        "Anonymous voting timestamp precision must be greater than zero.")
+    .Validate(options => options.RequestsPerMinute > 0,
+        "Anonymous voting rate limit must be greater than zero.")
+    .ValidateOnStart();
+builder.Services.AddRateLimiter(rateLimiterOptions =>
+{
+    int permitLimit = builder.Configuration.GetValue<int?>(
+        $"{AnonymousVoterOptions.SectionName}:RequestsPerMinute") ?? 30;
+    rateLimiterOptions.AddPolicy("public-voting", httpContext =>
+    {
+        string cookieName = builder.Configuration.GetValue<string>(
+            $"{AnonymousVoterOptions.SectionName}:CookieName") ??
+            "__Host-AnonPulse.Voter";
+        string partitionKey = httpContext.Request.Cookies.TryGetValue(
+                cookieName,
+                out string? protectedCookie) &&
+            !string.IsNullOrEmpty(protectedCookie)
+                ? Convert.ToHexStringLower(SHA256.HashData(
+                    Encoding.UTF8.GetBytes(protectedCookie)))
+                : httpContext.Connection.RemoteIpAddress?.ToString() ?? "missing-session";
+
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey,
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = permitLimit,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            });
+    });
+    rateLimiterOptions.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+});
 builder.Services
     .AddDataProtection()
     .SetApplicationName("AnonPulse")
@@ -163,6 +209,7 @@ if (app.Environment.IsDevelopment())
 
 // Настраиваем HTTP pipeline
 app.UseHttpsRedirection();
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 

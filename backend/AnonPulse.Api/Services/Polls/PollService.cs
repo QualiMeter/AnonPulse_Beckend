@@ -2,6 +2,7 @@ using AnonPulse.Api.Contracts.Polls;
 using AnonPulse.Api.Data;
 using AnonPulse.Api.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace AnonPulse.Api.Services.Polls;
 
@@ -131,16 +132,50 @@ public sealed class PollService(
         bool validateQuestions,
         CancellationToken cancellationToken)
     {
-        Poll? poll = await PollsWithQuestions(tracking: true)
-            .SingleOrDefaultAsync(poll => poll.Id == pollId, cancellationToken);
+        IDbContextTransaction? transaction = null;
+        Poll? poll;
+        if (targetStatus == PollStatus.Closed && dbContext.Database.IsRelational())
+        {
+            transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+            poll = await dbContext.Polls
+                .FromSqlInterpolated(
+                    $"SELECT p.*, p.xmin FROM polls AS p WHERE p.id = {pollId} FOR UPDATE")
+                .SingleOrDefaultAsync(cancellationToken);
+
+            if (poll is not null)
+            {
+                await dbContext.Entry(poll)
+                    .Collection(item => item.Questions)
+                    .Query()
+                    .Include(question => question.Options)
+                    .LoadAsync(cancellationToken);
+            }
+        }
+        else
+        {
+            poll = await PollsWithQuestions(tracking: true)
+                .SingleOrDefaultAsync(item => item.Id == pollId, cancellationToken);
+        }
 
         if (poll is null || (!isAdmin && poll.CreatorId != actorId))
         {
+            if (transaction is not null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                await transaction.DisposeAsync();
+            }
+
             return new PollTransitionResult(PollTransitionOutcome.NotFound);
         }
 
         if (poll.Status != expectedStatus)
         {
+            if (transaction is not null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                await transaction.DisposeAsync();
+            }
+
             return Conflict(
                 $"Poll cannot transition from '{ToStatusValue(poll.Status)}' " +
                 $"to '{ToStatusValue(targetStatus)}'.");
@@ -148,6 +183,12 @@ public sealed class PollService(
 
         if (validateQuestions && !HasValidQuestions(poll))
         {
+            if (transaction is not null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                await transaction.DisposeAsync();
+            }
+
             return Conflict(
                 "Poll must contain at least one valid question with at least two " +
                 "non-empty unique options before publication.");
@@ -167,11 +208,27 @@ public sealed class PollService(
         try
         {
             await dbContext.SaveChangesAsync(cancellationToken);
+            if (transaction is not null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+            }
         }
         catch (DbUpdateConcurrencyException)
         {
+            if (transaction is not null)
+            {
+                await transaction.RollbackAsync(CancellationToken.None);
+            }
+
             dbContext.ChangeTracker.Clear();
             return Conflict("Poll state was changed by another request.");
+        }
+        finally
+        {
+            if (transaction is not null)
+            {
+                await transaction.DisposeAsync();
+            }
         }
 
         return new PollTransitionResult(
