@@ -10,10 +10,14 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 const string BootstrapInitialTeacherArgument = "--bootstrap-initial-teacher";
+const string BootstrapAdminArgument = "--bootstrap-admin";
 const string CreateDevelopmentTeacherArgument = "--create-development-teacher";
 
 bool bootstrapInitialTeacher = args.Contains(
     BootstrapInitialTeacherArgument,
+    StringComparer.Ordinal);
+bool bootstrapAdmin = args.Contains(
+    BootstrapAdminArgument,
     StringComparer.Ordinal);
 bool createDevelopmentTeacher = args.Contains(
     CreateDevelopmentTeacherArgument,
@@ -23,6 +27,10 @@ string[] applicationArguments = args
         !string.Equals(
             argument,
             BootstrapInitialTeacherArgument,
+            StringComparison.Ordinal) &&
+        !string.Equals(
+            argument,
+            BootstrapAdminArgument,
             StringComparison.Ordinal) &&
         !string.Equals(
             argument,
@@ -102,6 +110,21 @@ if (bootstrapInitialTeacher)
     catch (Exception exception)
     {
         Console.Error.WriteLine($"Initial teacher bootstrap failed: {exception.Message}");
+        Environment.ExitCode = 1;
+    }
+
+    return;
+}
+
+if (bootstrapAdmin)
+{
+    try
+    {
+        await AdminBootstrapper.CreateAsync(app.Services, app.Configuration);
+    }
+    catch (Exception exception)
+    {
+        Console.Error.WriteLine($"Administrator bootstrap failed: {exception.Message}");
         Environment.ExitCode = 1;
     }
 
