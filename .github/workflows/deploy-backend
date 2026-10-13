@@ -1,0 +1,80 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.x
+
+      - name: Restore
+        working-directory: src/AnonPulse.Api
+        run: dotnet restore AnonPulse.Api.csproj
+
+      - name: Build
+        working-directory: src/AnonPulse.Api
+        run: dotnet build AnonPulse.Api.csproj -c Release --no-restore
+
+      - name: Publish
+        working-directory: src/AnonPulse.Api
+        run: dotnet publish AnonPulse.Api.csproj -c Release --no-build -o ../../publish
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SERVER_SSH_KEY }}
+
+      - name: Add server to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -H "${{ secrets.SERVER_HOST }}" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Stop backend
+        run: |
+          ssh "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
+            "sudo systemctl stop pulse-api"
+
+      - name: Verify service deployment directory
+        run: |
+          ssh "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
+            "grep -Fx 'WorkingDirectory=/var/www/pulse/backend' /etc/systemd/system/pulse-api.service >/dev/null"
+
+      - name: Create deployment marker
+        run: |
+          printf '%s\n' "${GITHUB_SHA}" > publish/deploy-commit.txt
+          printf '%s\n' "ai-schedule-v5-runtime-date-2026-10-03" > publish/ai-schedule-build.txt
+
+      - name: Deploy
+        run: |
+          tar -C publish -cf - . | ssh "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
+            "mkdir -p /var/www/pulse/backend && rm -rf /var/www/pulse/backend/* && tar -C /var/www/pulse/backend -xf -"
+
+      - name: Verify deployed build
+        run: |
+          ssh "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
+            "test -s /var/www/pulse/backend/AnonPulse.Api.dll && test \"\$(cat /var/www/pulse/backend/deploy-commit.txt)\" = \"${GITHUB_SHA}\" && test \"\$(cat /var/www/pulse/backend/ai-schedule-build.txt)\" = \"ai-schedule-v5-runtime-date-2026-10-03\""
+
+      - name: Start backend
+        if: always()
+        run: |
+          ssh "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
+            "sudo systemctl start pulse-api"
+
+      - name: Check backend
+        run: |
+          ssh "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
+            "sudo -n systemctl is-active ripple-api"
