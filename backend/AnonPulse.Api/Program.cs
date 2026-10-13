@@ -16,6 +16,7 @@ using System.Threading.RateLimiting;
 const string BootstrapInitialTeacherArgument = "--bootstrap-initial-teacher";
 const string BootstrapAdminArgument = "--bootstrap-admin";
 const string CreateDevelopmentTeacherArgument = "--create-development-teacher";
+const string BrowserCorsPolicy = "BrowserApiClients";
 
 bool bootstrapInitialTeacher = args.Contains(
     BootstrapInitialTeacherArgument,
@@ -48,6 +49,28 @@ var builder = WebApplication.CreateBuilder(applicationArguments);
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 builder.Services.AddAuthorization();
+// CORS is needed only for browser clients hosted on a different origin.
+// The Scalar UI served at /scalar/ is same-origin and does not need CORS.
+// Add other trusted frontend origins via Cors__AllowedOrigins__0, __1, etc.
+// Never use AllowAnyOrigin() together with AllowCredentials().
+string[] additionalCorsOrigins = builder.Configuration
+    .GetSection("Cors:AllowedOrigins")
+    .Get<string[]>() ?? [];
+string[] browserOrigins = [
+    "https://client.scalar.com",
+    .. additionalCorsOrigins
+        .Select(origin => origin.Trim().TrimEnd('/'))
+        .Where(origin => origin.Length > 0)
+];
+
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(BrowserCorsPolicy, policy =>
+        policy.WithOrigins(browserOrigins)
+            .AllowAnyHeader()
+            .AllowAnyMethod()
+            .AllowCredentials());
+});
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IDecisionService, DecisionService>();
 builder.Services.AddScoped<IPollService, PollService>();
@@ -211,6 +234,11 @@ if (app.Environment.IsDevelopment())
 
 
 // Настраиваем HTTP pipeline
+// Route matching must run before CORS and endpoint-specific rate limiting.
+// Handle CORS preflight (OPTIONS) before possible HTTPS redirection: browsers
+// cannot follow an HTTP-to-HTTPS redirect during preflight.
+app.UseRouting();
+app.UseCors(BrowserCorsPolicy);
 app.UseHttpsRedirection();
 app.UseRateLimiter();
 app.UseAuthentication();
