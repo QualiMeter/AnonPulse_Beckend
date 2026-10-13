@@ -155,20 +155,75 @@ public sealed class DecisionEndpointsTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task InvalidTextUnknownPollAndDraft_ReturnExpectedProblems()
+    public async Task MaximumLengthTextWithSurroundingWhitespace_IsAcceptedAndStoredTrimmed()
     {
         SeededUser teacher = await CreateUserAsync(RoleNames.Teacher);
-        Guid openPollId = await SeedPollAsync(teacher.Id, PollStatus.Open);
+        Guid pollId = await SeedPollAsync(teacher.Id, PollStatus.Open);
+        using HttpClient client = _factory.CreateHttpsClient();
+        await LoginAsync(client, teacher);
+        string significantText = new('a', DecisionContractLimits.MaximumTextLength);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            $"/api/polls/{pollId}/decision",
+            new { Text = $"  {significantText}\r\n" });
+        DecisionResponse? decision =
+            await response.Content.ReadFromJsonAsync<DecisionResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(decision);
+        Assert.Equal(significantText, decision.Text);
+        using IServiceScope scope = _factory.Services.CreateScope();
+        Decision stored = await scope.ServiceProvider
+            .GetRequiredService<ApplicationDbContext>()
+            .Decisions.SingleAsync(item => item.PollId == pollId);
+        Assert.Equal(significantText, stored.Text);
+    }
+
+    [Fact]
+    public async Task TextExceedingMaximumSignificantLength_IsRejected()
+    {
+        SeededUser teacher = await CreateUserAsync(RoleNames.Teacher);
+        Guid pollId = await SeedPollAsync(teacher.Id, PollStatus.Open);
+        using HttpClient client = _factory.CreateHttpsClient();
+        await LoginAsync(client, teacher);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            $"/api/polls/{pollId}/decision",
+            new
+            {
+                Text = $"  {new string('a', DecisionContractLimits.MaximumTextLength + 1)}  "
+            });
+
+        AssertProblem(response, HttpStatusCode.BadRequest);
+        await AssertDecisionCountAsync(pollId, 0);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" \t\r\n ")]
+    public async Task EmptyOrWhitespaceText_IsRejected(string text)
+    {
+        SeededUser teacher = await CreateUserAsync(RoleNames.Teacher);
+        Guid pollId = await SeedPollAsync(teacher.Id, PollStatus.Open);
+        using HttpClient client = _factory.CreateHttpsClient();
+        await LoginAsync(client, teacher);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            $"/api/polls/{pollId}/decision",
+            new { Text = text });
+
+        AssertProblem(response, HttpStatusCode.BadRequest);
+        await AssertDecisionCountAsync(pollId, 0);
+    }
+
+    [Fact]
+    public async Task UnknownPollAndDraft_ReturnExpectedProblems()
+    {
+        SeededUser teacher = await CreateUserAsync(RoleNames.Teacher);
         Guid draftPollId = await SeedPollAsync(teacher.Id, PollStatus.Draft);
         using HttpClient client = _factory.CreateHttpsClient();
         await LoginAsync(client, teacher);
 
-        HttpResponseMessage blank = await client.PutAsJsonAsync(
-            $"/api/polls/{openPollId}/decision",
-            new { Text = " \t\n " });
-        HttpResponseMessage tooLong = await client.PutAsJsonAsync(
-            $"/api/polls/{openPollId}/decision",
-            new { Text = new string('a', 5001) });
         HttpResponseMessage missing = await client.PutAsJsonAsync(
             $"/api/polls/{Guid.NewGuid()}/decision",
             new { Text = "Missing" });
@@ -176,11 +231,8 @@ public sealed class DecisionEndpointsTests : IAsyncLifetime
             $"/api/polls/{draftPollId}/decision",
             new { Text = "Draft" });
 
-        AssertProblem(blank, HttpStatusCode.BadRequest);
-        AssertProblem(tooLong, HttpStatusCode.BadRequest);
         AssertProblem(missing, HttpStatusCode.NotFound);
         AssertProblem(draft, HttpStatusCode.Conflict);
-        await AssertDecisionCountAsync(openPollId, 0);
         await AssertDecisionCountAsync(draftPollId, 0);
     }
 
