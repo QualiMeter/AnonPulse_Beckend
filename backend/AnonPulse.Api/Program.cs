@@ -4,6 +4,7 @@ using AnonPulse.Api.Data;
 using AnonPulse.Api.Development;
 using AnonPulse.Api.Models;
 using AnonPulse.Api.Services.Polls;
+using AnonPulse.Api.Services.PollResults;
 using AnonPulse.Api.Services.Voting;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
@@ -48,6 +49,7 @@ builder.Services.AddOpenApi();
 builder.Services.AddAuthorization();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IPollService, PollService>();
+builder.Services.AddScoped<IPollResultsService, PollResultsService>();
 builder.Services.AddScoped<IPublicVotingService, PublicVotingService>();
 builder.Services.AddSingleton<IAnonymousVoterTokenService, AnonymousVoterTokenService>();
 builder.Services.AddSingleton<IAnonymousVotingSessionRateLimiter,
