@@ -219,7 +219,6 @@ bool enableApiDocs =
 if (enableApiDocs)
 {
     app.MapOpenApi();
-    app.MapScalarApiReference();
 
     app.MapScalarApiReference(options =>
     {
