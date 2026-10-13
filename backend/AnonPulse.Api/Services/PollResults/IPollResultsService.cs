@@ -6,14 +6,23 @@ public interface IPollResultsService
 {
     Task<PollResultsResult> GetAsync(
         Guid pollId,
+        PollResultsAccessContext accessContext,
         CancellationToken cancellationToken = default);
 }
+
+public sealed record PollResultsAccessContext(
+    Guid? UserId,
+    bool IsAuthenticated,
+    bool IsTeacher,
+    bool IsAdmin);
 
 public enum PollResultsOutcome
 {
     Succeeded,
     NotFound,
-    NotPublished
+    NotPublished,
+    Unauthorized,
+    Forbidden
 }
 
 public sealed record PollResultsResult(

@@ -45,12 +45,12 @@ public sealed class DecisionService(
             return new DecisionUpsertResult(DecisionUpsertOutcome.NotFound);
         }
 
-        if (poll.Status == PollStatus.Draft)
+        if (poll.Status != PollStatus.Closed)
         {
             await RollbackAsync(transaction, cancellationToken);
             return new DecisionUpsertResult(
                 DecisionUpsertOutcome.Conflict,
-                Error: "A decision cannot be published for a draft poll.");
+                Error: "A decision can only be published after the poll is closed.");
         }
 
         if (transaction is not null)
@@ -115,7 +115,7 @@ public sealed class DecisionService(
             .AsNoTracking()
             .Where(item =>
                 item.PollId == pollId &&
-                item.Poll.Status != PollStatus.Draft &&
+                item.Poll.Status == PollStatus.Closed &&
                 item.PublishedAt != null)
             .Select(item => new DecisionResponse(
                 item.Id,

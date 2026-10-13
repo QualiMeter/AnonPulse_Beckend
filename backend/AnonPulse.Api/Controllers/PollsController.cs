@@ -84,6 +84,49 @@ public sealed class PollsController(IPollService pollService) : ControllerBase
         return poll is null ? NotFound() : Ok(poll);
     }
 
+    [HttpPut("{id:guid}")]
+    [Authorize(Roles = RoleNames.Teacher)]
+    public async Task<ActionResult<PollResponse>> Update(
+        Guid id,
+        CreatePollRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCurrentUserId(out Guid creatorId))
+        {
+            return Unauthorized();
+        }
+
+        PollUpdateResult result = await pollService.UpdateAsync(
+            creatorId,
+            id,
+            request,
+            cancellationToken);
+
+        return result.Outcome switch
+        {
+            PollUpdateOutcome.Succeeded => Ok(result.Poll),
+            PollUpdateOutcome.Invalid => BadRequest(new ValidationProblemDetails(
+                result.ValidationErrors!.ToDictionary(item => item.Key, item => item.Value))
+            {
+                Status = StatusCodes.Status400BadRequest,
+                Title = "One or more validation errors occurred."
+            }),
+            PollUpdateOutcome.NotFound => NotFound(new ProblemDetails
+            {
+                Status = StatusCodes.Status404NotFound,
+                Title = "Poll was not found."
+            }),
+            PollUpdateOutcome.Conflict => Conflict(new ProblemDetails
+            {
+                Status = StatusCodes.Status409Conflict,
+                Title = "Poll cannot be edited.",
+                Detail = result.Error
+            }),
+            _ => throw new InvalidOperationException(
+                $"Unknown poll update outcome: {result.Outcome}.")
+        };
+    }
+
     [HttpPost("{id:guid}/publish")]
     [Authorize(Roles = RoleNames.Teacher + "," + RoleNames.Admin)]
     public async Task<ActionResult<PollResponse>> Publish(

@@ -6,7 +6,9 @@ using AnonPulse.Api.Contracts.PublicPolls;
 using AnonPulse.Api.Data;
 using AnonPulse.Api.Models;
 using AnonPulse.Api.Services.PollResults;
+using AnonPulse.Api.Tests.Auth;
 using AnonPulse.Api.Tests.Voting;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
@@ -40,13 +42,16 @@ public sealed class PollResultsEndpointsTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task OpenMultiQuestionPoll_ReturnsOrderedPublicInterimResults()
+    public async Task OpenMultiQuestionPoll_OwnerReceivesOrderedInterimResults()
     {
+        SeededUser owner = await CreateUserAsync(RoleNames.Teacher);
         SeededResultsPoll poll = await SeedPollAsync(
             PollStatus.Open,
             [[2, 1], [1, 0, 2]],
-            participants: 3);
+            participants: 3,
+            creatorId: owner.Id);
         using HttpClient client = _factory.CreateHttpsClient();
+        await LoginAsync(client, owner);
 
         HttpResponseMessage response =
             await client.GetAsync($"/api/polls/{poll.Id}/results");
@@ -105,13 +110,62 @@ public sealed class PollResultsEndpointsTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task PublishedPollWithoutVotes_ReturnsZeros()
+    public async Task OpenPoll_EnforcesOwnerAndRoleAccess()
     {
+        SeededUser owner = await CreateUserAsync(RoleNames.Teacher);
+        SeededUser admin = await CreateUserAsync(RoleNames.Admin);
+        SeededUser foreignTeacher = await CreateUserAsync(RoleNames.Teacher);
+        SeededUser wrongRole = await CreateUserAsync(role: null);
+        SeededResultsPoll poll = await SeedPollAsync(
+            PollStatus.Open,
+            [[1, 0]],
+            participants: 1,
+            creatorId: owner.Id);
+        using HttpClient anonymousClient = _factory.CreateHttpsClient();
+        using HttpClient ownerClient = _factory.CreateHttpsClient();
+        using HttpClient adminClient = _factory.CreateHttpsClient();
+        using HttpClient foreignClient = _factory.CreateHttpsClient();
+        using HttpClient wrongRoleClient = _factory.CreateHttpsClient();
+        await LoginAsync(ownerClient, owner);
+        await LoginAsync(adminClient, admin);
+        await LoginAsync(foreignClient, foreignTeacher);
+        await LoginAsync(wrongRoleClient, wrongRole);
+
+        HttpResponseMessage anonymous =
+            await anonymousClient.GetAsync($"/api/polls/{poll.Id}/results");
+        HttpResponseMessage ownerResponse =
+            await ownerClient.GetAsync($"/api/polls/{poll.Id}/results");
+        HttpResponseMessage adminResponse =
+            await adminClient.GetAsync($"/api/polls/{poll.Id}/results");
+        HttpResponseMessage foreign =
+            await foreignClient.GetAsync($"/api/polls/{poll.Id}/results");
+        HttpResponseMessage forbidden =
+            await wrongRoleClient.GetAsync($"/api/polls/{poll.Id}/results");
+
+        AssertProblem(anonymous, HttpStatusCode.Unauthorized);
+        Assert.Equal(HttpStatusCode.OK, ownerResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, adminResponse.StatusCode);
+        AssertProblem(foreign, HttpStatusCode.NotFound);
+        AssertProblem(forbidden, HttpStatusCode.Forbidden);
+        PollResultsResponse? ownerResults =
+            await ownerResponse.Content.ReadFromJsonAsync<PollResultsResponse>();
+        PollResultsResponse? adminResults =
+            await adminResponse.Content.ReadFromJsonAsync<PollResultsResponse>();
+        Assert.Equal("interim", ownerResults?.ResultsType);
+        Assert.Equal("interim", adminResults?.ResultsType);
+    }
+
+    [Fact]
+    public async Task OpenPollWithoutVotes_OwnerReceivesZeros()
+    {
+        SeededUser owner = await CreateUserAsync(RoleNames.Teacher);
         SeededResultsPoll poll = await SeedPollAsync(
             PollStatus.Open,
             [[0, 0], [0, 0]],
-            participants: 0);
+            participants: 0,
+            creatorId: owner.Id);
         using HttpClient client = _factory.CreateHttpsClient();
+        await LoginAsync(client, owner);
 
         PollResultsResponse? results = await client.GetFromJsonAsync<PollResultsResponse>(
             $"/api/polls/{poll.Id}/results");
@@ -142,6 +196,11 @@ public sealed class PollResultsEndpointsTests : IAsyncLifetime
         string draftJson = await draftResponse.Content.ReadAsStringAsync();
         HttpResponseMessage missingResponse =
             await client.GetAsync($"/api/polls/{Guid.NewGuid()}/results");
+        SeededUser owner = await CreateUserAsync(RoleNames.Teacher);
+        using HttpClient authenticatedClient = _factory.CreateHttpsClient();
+        await LoginAsync(authenticatedClient, owner);
+        HttpResponseMessage authenticatedDraftResponse =
+            await authenticatedClient.GetAsync($"/api/polls/{draft.Id}/results");
 
         Assert.Equal(HttpStatusCode.Conflict, draftResponse.StatusCode);
         Assert.Equal(
@@ -149,6 +208,7 @@ public sealed class PollResultsEndpointsTests : IAsyncLifetime
             draftResponse.Content.Headers.ContentType?.MediaType);
         Assert.DoesNotContain("SECRET DRAFT TITLE", draftJson, StringComparison.Ordinal);
         Assert.DoesNotContain("Question 0", draftJson, StringComparison.Ordinal);
+        AssertProblem(authenticatedDraftResponse, HttpStatusCode.Conflict);
         Assert.Equal(HttpStatusCode.NotFound, missingResponse.StatusCode);
         Assert.Equal(
             "application/problem+json",
@@ -158,10 +218,12 @@ public sealed class PollResultsEndpointsTests : IAsyncLifetime
     [Fact]
     public async Task AnonymousVote_RemainsFunctionalAndAppearsInResults()
     {
+        SeededUser owner = await CreateUserAsync(RoleNames.Teacher);
         SeededResultsPoll poll = await SeedPollAsync(
             PollStatus.Open,
             [[0, 0]],
-            participants: 0);
+            participants: 0,
+            creatorId: owner.Id);
         using HttpClient client = _factory.CreateHttpsClient();
         await client.GetAsync($"/api/public/polls/{poll.Id}");
         var request = new HttpRequestMessage(
@@ -174,7 +236,9 @@ public sealed class PollResultsEndpointsTests : IAsyncLifetime
         ]));
 
         HttpResponseMessage voteResponse = await client.SendAsync(request);
-        PollResultsResponse? results = await client.GetFromJsonAsync<PollResultsResponse>(
+        using HttpClient ownerClient = _factory.CreateHttpsClient();
+        await LoginAsync(ownerClient, owner);
+        PollResultsResponse? results = await ownerClient.GetFromJsonAsync<PollResultsResponse>(
             $"/api/polls/{poll.Id}/results");
 
         Assert.Equal(HttpStatusCode.NoContent, voteResponse.StatusCode);
@@ -203,7 +267,13 @@ public sealed class PollResultsEndpointsTests : IAsyncLifetime
         await using var writerContext = new ApplicationDbContext(writerOptions);
         var service = new PollResultsService(readerContext);
 
-        Task<PollResultsResult> readTask = service.GetAsync(poll.Id);
+        Task<PollResultsResult> readTask = service.GetAsync(
+            poll.Id,
+            new PollResultsAccessContext(
+                poll.CreatorId,
+                IsAuthenticated: true,
+                IsTeacher: true,
+                IsAdmin: false));
         await interceptor.SnapshotEstablished.WaitAsync(TimeSpan.FromSeconds(10));
         try
         {
@@ -220,6 +290,10 @@ public sealed class PollResultsEndpointsTests : IAsyncLifetime
                 TokenHash = new string('f', 64),
                 UsedAt = DateTime.UtcNow
             });
+            Poll pollToClose = await writerContext.Polls.SingleAsync(
+                item => item.Id == poll.Id);
+            pollToClose.Status = PollStatus.Closed;
+            pollToClose.ClosedAt = DateTime.UtcNow;
             await writerContext.SaveChangesAsync();
         }
         finally
@@ -230,6 +304,7 @@ public sealed class PollResultsEndpointsTests : IAsyncLifetime
         PollResultsResult snapshot = await readTask;
 
         Assert.NotNull(snapshot.Results);
+        Assert.Equal("interim", snapshot.Results.ResultsType);
         Assert.Equal(0, snapshot.Results.TotalParticipants);
         Assert.All(
             snapshot.Results.Questions.SelectMany(question => question.Options),
@@ -238,26 +313,83 @@ public sealed class PollResultsEndpointsTests : IAsyncLifetime
             vote => vote.Option.Question.PollId == poll.Id));
         Assert.Equal(1, await writerContext.VoteParticipations.CountAsync(
             participation => participation.PollId == poll.Id));
+        Assert.Equal(PollStatus.Closed, await writerContext.Polls
+            .Where(item => item.Id == poll.Id)
+            .Select(item => item.Status)
+            .SingleAsync());
+    }
+
+    private async Task<SeededUser> CreateUserAsync(string? role)
+    {
+        using IServiceScope scope = _factory.Services.CreateScope();
+        RoleManager<IdentityRole<Guid>> roleManager =
+            scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole<Guid>>>();
+        UserManager<ApplicationUser> userManager =
+            scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        if (role is not null && !await roleManager.RoleExistsAsync(role))
+        {
+            IdentityResult roleResult =
+                await roleManager.CreateAsync(new IdentityRole<Guid>(role));
+            Assert.True(roleResult.Succeeded);
+        }
+
+        string email = $"results-{Guid.NewGuid():N}@example.test";
+        var user = new ApplicationUser
+        {
+            Id = Guid.NewGuid(),
+            Email = email,
+            UserName = email,
+            EmailConfirmed = true
+        };
+        const string password = "Results-password-123!";
+        IdentityResult userResult = await userManager.CreateAsync(user, password);
+        Assert.True(userResult.Succeeded);
+        if (role is not null)
+        {
+            IdentityResult roleAssignment = await userManager.AddToRoleAsync(user, role);
+            Assert.True(roleAssignment.Succeeded);
+        }
+
+        return new SeededUser(user.Id, email, password);
+    }
+
+    private static async Task LoginAsync(HttpClient client, SeededUser user)
+    {
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/auth/login",
+            new { email = user.Email, password = user.Password });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    private static void AssertProblem(
+        HttpResponseMessage response,
+        HttpStatusCode expectedStatus)
+    {
+        Assert.Equal(expectedStatus, response.StatusCode);
+        Assert.Equal(
+            "application/problem+json",
+            response.Content.Headers.ContentType?.MediaType);
     }
 
     private async Task<SeededResultsPoll> SeedPollAsync(
         PollStatus status,
         IReadOnlyList<IReadOnlyList<int>> voteCounts,
         int participants,
-        string? title = "Results test")
+        string? title = "Results test",
+        Guid? creatorId = null)
     {
         using IServiceScope scope = _factory.Services.CreateScope();
         ApplicationDbContext db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        var teacher = new ApplicationUser
+        ApplicationUser? teacher = creatorId is null ? new ApplicationUser
         {
             Id = Guid.NewGuid(),
             UserName = $"results-{Guid.NewGuid():N}@example.test",
             Email = $"results-{Guid.NewGuid():N}@example.test"
-        };
+        } : null;
         var poll = new Poll
         {
             Id = Guid.NewGuid(),
-            CreatorId = teacher.Id,
+            CreatorId = creatorId ?? teacher!.Id,
             Title = title,
             Status = status,
             CreatedAt = DateTime.UtcNow,
@@ -329,14 +461,18 @@ public sealed class PollResultsEndpointsTests : IAsyncLifetime
             });
         }
 
-        db.Users.Add(teacher);
+        if (teacher is not null)
+        {
+            db.Users.Add(teacher);
+        }
         db.Polls.Add(poll);
         await db.SaveChangesAsync();
-        return new SeededResultsPoll(poll.Id, questionIds, optionIds);
+        return new SeededResultsPoll(poll.Id, poll.CreatorId, questionIds, optionIds);
     }
 
     private sealed record SeededResultsPoll(
         Guid Id,
+        Guid CreatorId,
         IReadOnlyList<Guid> QuestionIds,
         IReadOnlyList<IReadOnlyList<Guid>> OptionIds);
 

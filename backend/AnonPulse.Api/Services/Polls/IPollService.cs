@@ -18,6 +18,12 @@ public interface IPollService
         Guid pollId,
         CancellationToken cancellationToken = default);
 
+    Task<PollUpdateResult> UpdateAsync(
+        Guid creatorId,
+        Guid pollId,
+        CreatePollRequest request,
+        CancellationToken cancellationToken = default);
+
     Task<PollTransitionResult> PublishAsync(
         Guid actorId,
         bool isAdmin,
@@ -49,3 +55,17 @@ public sealed record PollCreationResult(
 {
     public bool Succeeded => Poll is not null;
 }
+
+public enum PollUpdateOutcome
+{
+    Succeeded,
+    Invalid,
+    NotFound,
+    Conflict
+}
+
+public sealed record PollUpdateResult(
+    PollUpdateOutcome Outcome,
+    PollResponse? Poll = null,
+    IReadOnlyDictionary<string, string[]>? ValidationErrors = null,
+    string? Error = null);

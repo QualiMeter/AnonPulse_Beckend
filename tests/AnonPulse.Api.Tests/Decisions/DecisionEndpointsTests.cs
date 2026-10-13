@@ -42,7 +42,7 @@ public sealed class DecisionEndpointsTests : IAsyncLifetime
     {
         SeededUser owner = await CreateUserAsync(RoleNames.Teacher);
         SeededUser other = await CreateUserAsync(RoleNames.Teacher);
-        Guid pollId = await SeedPollAsync(owner.Id, PollStatus.Open);
+        Guid pollId = await SeedPollAsync(owner.Id, PollStatus.Closed);
         using HttpClient client = _factory.CreateHttpsClient();
         await LoginAsync(client, owner);
 
@@ -74,7 +74,7 @@ public sealed class DecisionEndpointsTests : IAsyncLifetime
     {
         SeededUser owner = await CreateUserAsync(RoleNames.Teacher);
         SeededUser admin = await CreateUserAsync(RoleNames.Admin);
-        Guid pollId = await SeedPollAsync(owner.Id, PollStatus.Open);
+        Guid pollId = await SeedPollAsync(owner.Id, PollStatus.Closed);
         using HttpClient ownerClient = _factory.CreateHttpsClient();
         using HttpClient adminClient = _factory.CreateHttpsClient();
         await LoginAsync(ownerClient, owner);
@@ -120,12 +120,40 @@ public sealed class DecisionEndpointsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task OwnerAndAdministrator_CannotPublishDecisionForOpenPoll()
+    {
+        SeededUser owner = await CreateUserAsync(RoleNames.Teacher);
+        SeededUser admin = await CreateUserAsync(RoleNames.Admin);
+        Guid pollId = await SeedPollAsync(owner.Id, PollStatus.Open);
+        using HttpClient ownerClient = _factory.CreateHttpsClient();
+        using HttpClient adminClient = _factory.CreateHttpsClient();
+        await LoginAsync(ownerClient, owner);
+        await LoginAsync(adminClient, admin);
+
+        HttpResponseMessage ownerResponse = await ownerClient.PutAsJsonAsync(
+            $"/api/polls/{pollId}/decision",
+            new { Text = "Owner decision" });
+        HttpResponseMessage adminResponse = await adminClient.PutAsJsonAsync(
+            $"/api/polls/{pollId}/decision",
+            new { Text = "Admin decision" });
+        string ownerBody = await ownerResponse.Content.ReadAsStringAsync();
+
+        AssertProblem(ownerResponse, HttpStatusCode.Conflict);
+        AssertProblem(adminResponse, HttpStatusCode.Conflict);
+        Assert.Contains(
+            "only be published after the poll is closed",
+            ownerBody,
+            StringComparison.Ordinal);
+        await AssertDecisionCountAsync(pollId, 0);
+    }
+
+    [Fact]
     public async Task ForeignTeacherAnonymousAndWrongRole_AreRejected()
     {
         SeededUser owner = await CreateUserAsync(RoleNames.Teacher);
         SeededUser foreignTeacher = await CreateUserAsync(RoleNames.Teacher);
         SeededUser wrongRole = await CreateUserAsync(role: null);
-        Guid pollId = await SeedPollAsync(owner.Id, PollStatus.Open);
+        Guid pollId = await SeedPollAsync(owner.Id, PollStatus.Closed);
         using HttpClient anonymousClient = _factory.CreateHttpsClient();
         using HttpClient foreignClient = _factory.CreateHttpsClient();
         using HttpClient wrongRoleClient = _factory.CreateHttpsClient();
@@ -158,7 +186,7 @@ public sealed class DecisionEndpointsTests : IAsyncLifetime
     public async Task MaximumLengthTextWithSurroundingWhitespace_IsAcceptedAndStoredTrimmed()
     {
         SeededUser teacher = await CreateUserAsync(RoleNames.Teacher);
-        Guid pollId = await SeedPollAsync(teacher.Id, PollStatus.Open);
+        Guid pollId = await SeedPollAsync(teacher.Id, PollStatus.Closed);
         using HttpClient client = _factory.CreateHttpsClient();
         await LoginAsync(client, teacher);
         string significantText = new('a', DecisionContractLimits.MaximumTextLength);
@@ -183,7 +211,7 @@ public sealed class DecisionEndpointsTests : IAsyncLifetime
     public async Task TextExceedingMaximumSignificantLength_IsRejected()
     {
         SeededUser teacher = await CreateUserAsync(RoleNames.Teacher);
-        Guid pollId = await SeedPollAsync(teacher.Id, PollStatus.Open);
+        Guid pollId = await SeedPollAsync(teacher.Id, PollStatus.Closed);
         using HttpClient client = _factory.CreateHttpsClient();
         await LoginAsync(client, teacher);
 
@@ -204,7 +232,7 @@ public sealed class DecisionEndpointsTests : IAsyncLifetime
     public async Task EmptyOrWhitespaceText_IsRejected(string text)
     {
         SeededUser teacher = await CreateUserAsync(RoleNames.Teacher);
-        Guid pollId = await SeedPollAsync(teacher.Id, PollStatus.Open);
+        Guid pollId = await SeedPollAsync(teacher.Id, PollStatus.Closed);
         using HttpClient client = _factory.CreateHttpsClient();
         await LoginAsync(client, teacher);
 
@@ -240,7 +268,7 @@ public sealed class DecisionEndpointsTests : IAsyncLifetime
     public async Task PublicGet_ReturnsOnlyPublishedDecisionAndNoPersonalData()
     {
         SeededUser owner = await CreateUserAsync(RoleNames.Teacher);
-        Guid pollId = await SeedPollAsync(owner.Id, PollStatus.Open);
+        Guid pollId = await SeedPollAsync(owner.Id, PollStatus.Closed);
         using HttpClient ownerClient = _factory.CreateHttpsClient();
         await LoginAsync(ownerClient, owner);
         DecisionResponse created =
@@ -293,10 +321,83 @@ public sealed class DecisionEndpointsTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task ConcurrentPuts_CreateExactlyOneDecisionWithoutServerErrors()
+    public async Task ExistingDecisionForOpenPoll_IsHiddenUntilPollCloses()
     {
         SeededUser owner = await CreateUserAsync(RoleNames.Teacher);
         Guid pollId = await SeedPollAsync(owner.Id, PollStatus.Open);
+        await SeedDecisionAsync(
+            pollId,
+            owner.Id,
+            "Previously published decision",
+            DateTime.UtcNow);
+        using HttpClient client = _factory.CreateHttpsClient();
+
+        HttpResponseMessage whileOpen =
+            await client.GetAsync($"/api/polls/{pollId}/decision");
+        string whileOpenBody = await whileOpen.Content.ReadAsStringAsync();
+        await SetPollStatusAsync(pollId, PollStatus.Closed);
+        HttpResponseMessage afterClose =
+            await client.GetAsync($"/api/polls/{pollId}/decision");
+        DecisionResponse? published =
+            await afterClose.Content.ReadFromJsonAsync<DecisionResponse>();
+
+        AssertProblem(whileOpen, HttpStatusCode.NotFound);
+        Assert.DoesNotContain(
+            "Previously published decision",
+            whileOpenBody,
+            StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.OK, afterClose.StatusCode);
+        Assert.Equal("Previously published decision", published?.Text);
+    }
+
+    [Fact]
+    public async Task ConcurrentCloseAndDecision_NeverPublishesWhilePollIsOpen()
+    {
+        SeededUser owner = await CreateUserAsync(RoleNames.Teacher);
+        Guid pollId = await SeedPollAsync(owner.Id, PollStatus.Open);
+        using HttpClient closeClient = _factory.CreateHttpsClient();
+        using HttpClient decisionClient = _factory.CreateHttpsClient();
+        await LoginAsync(closeClient, owner);
+        await LoginAsync(decisionClient, owner);
+
+        Task<HttpResponseMessage> closeTask =
+            closeClient.PostAsync($"/api/polls/{pollId}/close", null);
+        Task<HttpResponseMessage> decisionTask = decisionClient.PutAsJsonAsync(
+            $"/api/polls/{pollId}/decision",
+            new { Text = "Concurrent decision" });
+        await Task.WhenAll(closeTask, decisionTask);
+        using HttpResponseMessage closeResponse = await closeTask;
+        using HttpResponseMessage decisionResponse = await decisionTask;
+
+        Assert.Equal(HttpStatusCode.OK, closeResponse.StatusCode);
+        Assert.Contains(
+            decisionResponse.StatusCode,
+            new[] { HttpStatusCode.OK, HttpStatusCode.Conflict });
+        using IServiceScope scope = _factory.Services.CreateScope();
+        ApplicationDbContext db =
+            scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        PollStatus status = await db.Polls
+            .Where(item => item.Id == pollId)
+            .Select(item => item.Status)
+            .SingleAsync();
+        Decision? decision = await db.Decisions
+            .SingleOrDefaultAsync(item => item.PollId == pollId);
+        Assert.Equal(PollStatus.Closed, status);
+        if (decisionResponse.StatusCode == HttpStatusCode.Conflict)
+        {
+            Assert.Null(decision);
+        }
+        else
+        {
+            Assert.NotNull(decision);
+        }
+    }
+
+    [Fact]
+    public async Task ConcurrentPuts_CreateExactlyOneDecisionWithoutServerErrors()
+    {
+        SeededUser owner = await CreateUserAsync(RoleNames.Teacher);
+        Guid pollId = await SeedPollAsync(owner.Id, PollStatus.Closed);
         HttpClient[] clients = Enumerable.Range(0, 6)
             .Select(_ => _factory.CreateHttpsClient())
             .ToArray();
@@ -401,6 +502,16 @@ public sealed class DecisionEndpointsTests : IAsyncLifetime
             Text = text,
             PublishedAt = publishedAt
         });
+        await db.SaveChangesAsync();
+    }
+
+    private async Task SetPollStatusAsync(Guid pollId, PollStatus status)
+    {
+        using IServiceScope scope = _factory.Services.CreateScope();
+        ApplicationDbContext db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Poll poll = await db.Polls.SingleAsync(item => item.Id == pollId);
+        poll.Status = status;
+        poll.ClosedAt = status == PollStatus.Closed ? DateTime.UtcNow : null;
         await db.SaveChangesAsync();
     }
 

@@ -12,11 +12,12 @@ public sealed class PollResultsService(ApplicationDbContext dbContext)
 {
     public async Task<PollResultsResult> GetAsync(
         Guid pollId,
+        PollResultsAccessContext accessContext,
         CancellationToken cancellationToken = default)
     {
         if (!dbContext.Database.IsRelational())
         {
-            return await ReadSnapshotAsync(pollId, cancellationToken);
+            return await ReadSnapshotAsync(pollId, accessContext, cancellationToken);
         }
 
         await using IDbContextTransaction transaction =
@@ -25,19 +26,20 @@ public sealed class PollResultsService(ApplicationDbContext dbContext)
                 cancellationToken);
 
         PollResultsResult result =
-            await ReadSnapshotAsync(pollId, cancellationToken);
+            await ReadSnapshotAsync(pollId, accessContext, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return result;
     }
 
     private async Task<PollResultsResult> ReadSnapshotAsync(
         Guid pollId,
+        PollResultsAccessContext accessContext,
         CancellationToken cancellationToken)
     {
         PollHeader? poll = await dbContext.Polls
             .AsNoTracking()
             .Where(item => item.Id == pollId)
-            .Select(item => new PollHeader(item.Id, item.Status))
+            .Select(item => new PollHeader(item.Id, item.CreatorId, item.Status))
             .SingleOrDefaultAsync(cancellationToken);
 
         if (poll is null)
@@ -48,6 +50,24 @@ public sealed class PollResultsService(ApplicationDbContext dbContext)
         if (poll.Status == PollStatus.Draft)
         {
             return new PollResultsResult(PollResultsOutcome.NotPublished);
+        }
+
+        if (poll.Status == PollStatus.Open)
+        {
+            if (!accessContext.IsAuthenticated || accessContext.UserId is null)
+            {
+                return new PollResultsResult(PollResultsOutcome.Unauthorized);
+            }
+
+            if (!accessContext.IsTeacher && !accessContext.IsAdmin)
+            {
+                return new PollResultsResult(PollResultsOutcome.Forbidden);
+            }
+
+            if (!accessContext.IsAdmin && poll.CreatorId != accessContext.UserId)
+            {
+                return new PollResultsResult(PollResultsOutcome.NotFound);
+            }
         }
 
         PollQuestion[] questions = await dbContext.PollQuestions
@@ -134,5 +154,5 @@ public sealed class PollResultsService(ApplicationDbContext dbContext)
             $"Results are not available for poll status {status}.")
     };
 
-    private sealed record PollHeader(Guid Id, PollStatus Status);
+    private sealed record PollHeader(Guid Id, Guid CreatorId, PollStatus Status);
 }
