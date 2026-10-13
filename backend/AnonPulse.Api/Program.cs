@@ -220,6 +220,13 @@ if (enableApiDocs)
 {
     app.MapOpenApi();
     app.MapScalarApiReference();
+
+    app.MapScalarApiReference(options =>
+    {
+        options.AddServer(
+            "https://anonpulsebeckend-production.up.railway.app",
+            "Production");
+    });
 }
 
 // Проверка БД доступна только в Development
