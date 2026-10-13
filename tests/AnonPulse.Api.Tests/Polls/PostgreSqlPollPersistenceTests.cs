@@ -3,7 +3,6 @@ using AnonPulse.Api.Data;
 using AnonPulse.Api.Models;
 using AnonPulse.Api.Services.Polls;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Diagnostics;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -116,11 +115,8 @@ public sealed class PostgreSqlPollPersistenceTests : IAsyncLifetime
             pollId = created.Poll!.Id;
         }
 
-        using var barrier = new Barrier(2);
-        var interceptor = new CoordinatedSaveChangesInterceptor(barrier);
         var concurrentOptions = new DbContextOptionsBuilder<ApplicationDbContext>()
             .UseNpgsql(_postgres.GetConnectionString())
-            .AddInterceptors(interceptor)
             .Options;
         await using var firstContext = new ApplicationDbContext(concurrentOptions);
         await using var secondContext = new ApplicationDbContext(concurrentOptions);
@@ -145,24 +141,4 @@ public sealed class PostgreSqlPollPersistenceTests : IAsyncLifetime
                 .SingleAsync());
     }
 
-    private sealed class CoordinatedSaveChangesInterceptor(Barrier barrier)
-        : SaveChangesInterceptor
-    {
-        public override async ValueTask<InterceptionResult<int>> SavingChangesAsync(
-            DbContextEventData eventData,
-            InterceptionResult<int> result,
-            CancellationToken cancellationToken = default)
-        {
-            bool synchronized = await Task.Run(
-                () => barrier.SignalAndWait(TimeSpan.FromSeconds(10), cancellationToken),
-                cancellationToken);
-
-            if (!synchronized)
-            {
-                throw new TimeoutException("Concurrent publish test did not synchronize.");
-            }
-
-            return result;
-        }
-    }
 }

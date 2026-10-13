@@ -31,34 +31,7 @@ public sealed class PollService(
             CreatedAt = timeProvider.GetUtcNow().UtcDateTime
         };
 
-        for (int questionPosition = 0;
-             questionPosition < validation.Questions.Count;
-             questionPosition++)
-        {
-            ValidatedQuestion validatedQuestion = validation.Questions[questionPosition];
-            var question = new PollQuestion
-            {
-                Id = Guid.NewGuid(),
-                PollId = poll.Id,
-                Text = validatedQuestion.Text,
-                Position = questionPosition
-            };
-
-            for (int optionPosition = 0;
-                 optionPosition < validatedQuestion.Options.Count;
-                 optionPosition++)
-            {
-                question.Options.Add(new PollOption
-                {
-                    Id = Guid.NewGuid(),
-                    QuestionId = question.Id,
-                    Text = validatedQuestion.Options[optionPosition],
-                    Position = optionPosition
-                });
-            }
-
-            poll.Questions.Add(question);
-        }
+        ReplaceContents(poll, validation);
 
         dbContext.Polls.Add(poll);
         await dbContext.SaveChangesAsync(cancellationToken);
@@ -89,6 +62,114 @@ public sealed class PollService(
             .SingleOrDefaultAsync(cancellationToken);
 
         return poll is null ? null : ToResponse(poll);
+    }
+
+    public async Task<PollUpdateResult> UpdateAsync(
+        Guid creatorId,
+        Guid pollId,
+        CreatePollRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        PollRequestValidation validation = Validate(request);
+        if (validation.Errors.Count > 0)
+        {
+            return new PollUpdateResult(
+                PollUpdateOutcome.Invalid,
+                ValidationErrors: validation.Errors);
+        }
+
+        await using IDbContextTransaction? transaction =
+            dbContext.Database.IsRelational()
+                ? await dbContext.Database.BeginTransactionAsync(cancellationToken)
+                : null;
+
+        Poll? poll = transaction is null
+            ? await PollsWithQuestions(tracking: true)
+                .SingleOrDefaultAsync(item => item.Id == pollId, cancellationToken)
+            : await LockPollAsync(pollId, cancellationToken);
+
+        if (poll is null || poll.CreatorId != creatorId)
+        {
+            await RollbackAsync(transaction, cancellationToken);
+            return new PollUpdateResult(PollUpdateOutcome.NotFound);
+        }
+
+        if (poll.Status != PollStatus.Draft)
+        {
+            await RollbackAsync(transaction, cancellationToken);
+            return new PollUpdateResult(
+                PollUpdateOutcome.Conflict,
+                Error: "Only draft polls can be edited.");
+        }
+
+        try
+        {
+            if (transaction is not null)
+            {
+                await dbContext.Entry(poll)
+                    .Collection(item => item.Questions)
+                    .Query()
+                    .Include(question => question.Options)
+                    .LoadAsync(cancellationToken);
+                dbContext.PollOptions.RemoveRange(
+                    poll.Questions.SelectMany(question => question.Options));
+                dbContext.PollQuestions.RemoveRange(poll.Questions);
+                poll.Questions.Clear();
+                await dbContext.SaveChangesAsync(cancellationToken);
+                dbContext.ChangeTracker.Clear();
+                int updatedPolls = await dbContext.Polls
+                    .Where(item => item.Id == pollId)
+                    .ExecuteUpdateAsync(
+                        setters => setters.SetProperty(
+                            item => item.Title,
+                            validation.Title),
+                        cancellationToken);
+                if (updatedPolls != 1)
+                {
+                    await RollbackAsync(transaction, CancellationToken.None);
+                    dbContext.ChangeTracker.Clear();
+                    return new PollUpdateResult(
+                        PollUpdateOutcome.Conflict,
+                        Error: "Poll row was not available for update.");
+                }
+
+                poll = await dbContext.Polls
+                    .SingleAsync(item => item.Id == pollId, cancellationToken);
+            }
+            else
+            {
+                dbContext.PollOptions.RemoveRange(
+                    poll.Questions.SelectMany(question => question.Options));
+                dbContext.PollQuestions.RemoveRange(poll.Questions);
+                poll.Questions.Clear();
+                poll.Title = validation.Title;
+            }
+
+            ReplaceContents(poll, validation);
+            dbContext.PollQuestions.AddRange(poll.Questions);
+            await dbContext.SaveChangesAsync(cancellationToken);
+            if (transaction is not null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+            }
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            await RollbackAsync(transaction, CancellationToken.None);
+            dbContext.ChangeTracker.Clear();
+            return new PollUpdateResult(
+                PollUpdateOutcome.Conflict,
+                Error: "Poll state was changed by another request.");
+        }
+        catch
+        {
+            await RollbackAsync(transaction, CancellationToken.None);
+            throw;
+        }
+
+        return new PollUpdateResult(
+            PollUpdateOutcome.Succeeded,
+            ToResponse(poll));
     }
 
     public Task<PollTransitionResult> PublishAsync(
@@ -134,13 +215,10 @@ public sealed class PollService(
     {
         IDbContextTransaction? transaction = null;
         Poll? poll;
-        if (targetStatus == PollStatus.Closed && dbContext.Database.IsRelational())
+        if (dbContext.Database.IsRelational())
         {
             transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
-            poll = await dbContext.Polls
-                .FromSqlInterpolated(
-                    $"SELECT p.*, p.xmin FROM polls AS p WHERE p.id = {pollId} FOR UPDATE")
-                .SingleOrDefaultAsync(cancellationToken);
+            poll = await LockPollAsync(pollId, cancellationToken);
 
             if (poll is not null)
             {
@@ -248,6 +326,26 @@ public sealed class PollService(
             .Include(poll => poll.Questions)
             .ThenInclude(question => question.Options)
             .AsSplitQuery();
+    }
+
+    private async Task<Poll?> LockPollAsync(
+        Guid pollId,
+        CancellationToken cancellationToken)
+    {
+        return await dbContext.Polls
+            .FromSqlInterpolated(
+                $"SELECT p.*, p.xmin FROM polls AS p WHERE p.id = {pollId} FOR UPDATE")
+            .SingleOrDefaultAsync(cancellationToken);
+    }
+
+    private static async Task RollbackAsync(
+        IDbContextTransaction? transaction,
+        CancellationToken cancellationToken)
+    {
+        if (transaction is not null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+        }
     }
 
     private static PollRequestValidation Validate(CreatePollRequest request)
@@ -361,6 +459,40 @@ public sealed class PollService(
                 .Select(option => NormalizeWhitespace(option.Text))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Count() == question.Options.Count);
+    }
+
+    private static void ReplaceContents(
+        Poll poll,
+        PollRequestValidation validation)
+    {
+        for (int questionPosition = 0;
+             questionPosition < validation.Questions.Count;
+             questionPosition++)
+        {
+            ValidatedQuestion validatedQuestion = validation.Questions[questionPosition];
+            var question = new PollQuestion
+            {
+                Id = Guid.NewGuid(),
+                PollId = poll.Id,
+                Text = validatedQuestion.Text,
+                Position = questionPosition
+            };
+
+            for (int optionPosition = 0;
+                 optionPosition < validatedQuestion.Options.Count;
+                 optionPosition++)
+            {
+                question.Options.Add(new PollOption
+                {
+                    Id = Guid.NewGuid(),
+                    QuestionId = question.Id,
+                    Text = validatedQuestion.Options[optionPosition],
+                    Position = optionPosition
+                });
+            }
+
+            poll.Questions.Add(question);
+        }
     }
 
     private static string NormalizeWhitespace(string? value)

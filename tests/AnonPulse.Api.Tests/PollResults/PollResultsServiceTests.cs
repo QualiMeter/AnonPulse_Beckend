@@ -67,7 +67,13 @@ public sealed class PollResultsServiceTests
         await db.SaveChangesAsync();
 
         var service = new PollResultsService(db);
-        PollResultsResult result = await service.GetAsync(poll.Id);
+        PollResultsResult result = await service.GetAsync(
+            poll.Id,
+            new PollResultsAccessContext(
+                teacher.Id,
+                IsAuthenticated: true,
+                IsTeacher: true,
+                IsAdmin: false));
 
         Assert.Equal(PollResultsOutcome.Succeeded, result.Outcome);
         Assert.NotNull(result.Results);

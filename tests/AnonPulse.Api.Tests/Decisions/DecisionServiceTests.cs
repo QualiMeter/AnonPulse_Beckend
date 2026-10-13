@@ -27,9 +27,10 @@ public sealed class DecisionServiceTests
         {
             Id = pollId,
             CreatorId = ownerId,
-            Status = PollStatus.Open,
+            Status = PollStatus.Closed,
             CreatedAt = publishedAt.AddDays(-1),
             PublishedAt = publishedAt.AddHours(-1),
+            ClosedAt = publishedAt,
             Decision = new Decision
             {
                 Id = Guid.NewGuid(),
