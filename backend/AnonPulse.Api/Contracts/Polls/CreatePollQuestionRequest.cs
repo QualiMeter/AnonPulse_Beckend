@@ -2,4 +2,5 @@ namespace AnonPulse.Api.Contracts.Polls;
 
 public sealed record CreatePollQuestionRequest(
     string? Text,
-    IReadOnlyList<string?>? Options);
+    IReadOnlyList<string?>? Options,
+    bool AllowsMultipleAnswers = false);

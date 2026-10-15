@@ -34,6 +34,153 @@ public sealed class AuthEndpointsTests
         Assert.Contains("httponly", cookie, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("secure", cookie, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("samesite=strict", cookie, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("expires=", cookie, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("max-age=", cookie, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Login_WithRememberMe_IssuesPersistentCookieForAtMostThirtyDays()
+    {
+        var clock = new MutableTimeProvider(
+            new DateTimeOffset(2026, 10, 15, 8, 0, 0, TimeSpan.Zero));
+        await using var factory = new AuthWebApplicationFactory(clock);
+        SeededUser user = await factory.CreateTeacherAsync();
+        using HttpClient client = factory.CreateHttpsClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/auth/login",
+            new { user.Email, user.Password, RememberMe = true });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        string cookie = GetAuthenticationCookie(response);
+        DateTimeOffset expires = ParseCookieExpires(cookie);
+        Assert.InRange(
+            expires,
+            clock.GetUtcNow().AddDays(30).AddSeconds(-1),
+            clock.GetUtcNow().AddDays(30).AddSeconds(1));
+    }
+
+    [Fact]
+    public async Task Login_WhenTwoFactorIsRequired_DoesNotIssueApplicationCookie()
+    {
+        await using var factory = new AuthWebApplicationFactory();
+        SeededUser user = await factory.CreateTwoFactorTeacherAsync();
+        using HttpClient client = factory.CreateHttpsClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/auth/login",
+            new { user.Email, user.Password, RememberMe = true });
+        HttpResponseMessage me = await client.GetAsync("/api/auth/me");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.DoesNotContain(
+            response.Headers.GetValues("Set-Cookie"),
+            value => value.StartsWith(
+                "__Host-AnonPulse.Auth=",
+                StringComparison.Ordinal));
+        Assert.Equal(HttpStatusCode.Unauthorized, me.StatusCode);
+
+        ProblemDetails? problem =
+            await response.Content.ReadFromJsonAsync<ProblemDetails>();
+        Assert.NotNull(problem);
+        Assert.Equal("Two-factor authentication is required.", problem.Title);
+    }
+
+    [Fact]
+    public async Task SessionTicket_ExpiresAfterConfiguredServerLifetime()
+    {
+        var clock = new MutableTimeProvider(
+            new DateTimeOffset(2026, 10, 15, 8, 0, 0, TimeSpan.Zero));
+        await using var factory = new AuthWebApplicationFactory(clock);
+        SeededUser user = await factory.CreateTeacherAsync();
+        using HttpClient loginClient = factory.CreateHttpsClient();
+        HttpResponseMessage login = await loginClient.PostAsJsonAsync(
+            "/api/auth/login",
+            new { user.Email, user.Password });
+        string cookie = CookiePair(GetAuthenticationCookie(login));
+        clock.Advance(TimeSpan.FromHours(8).Add(TimeSpan.FromSeconds(1)));
+        using HttpClient reopenedClient = factory.CreateHttpsClient(handleCookies: false);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/auth/me");
+        request.Headers.Add("Cookie", cookie);
+
+        HttpResponseMessage response = await reopenedClient.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task PersistentCookie_SurvivesBrowserReopenAndSlidesBeforeExpiry()
+    {
+        var clock = new MutableTimeProvider(
+            new DateTimeOffset(2026, 10, 15, 8, 0, 0, TimeSpan.Zero));
+        await using var factory = new AuthWebApplicationFactory(clock);
+        SeededUser user = await factory.CreateTeacherAsync();
+        using HttpClient loginClient = factory.CreateHttpsClient();
+        HttpResponseMessage login = await loginClient.PostAsJsonAsync(
+            "/api/auth/login",
+            new { user.Email, user.Password, RememberMe = true });
+        string originalHeader = GetAuthenticationCookie(login);
+        string cookie = CookiePair(originalHeader);
+        DateTimeOffset originalExpiry = ParseCookieExpires(originalHeader);
+        clock.Advance(TimeSpan.FromDays(16));
+        using HttpClient reopenedClient = factory.CreateHttpsClient(handleCookies: false);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/auth/me");
+        request.Headers.Add("Cookie", cookie);
+
+        HttpResponseMessage response = await reopenedClient.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        string renewedHeader = GetAuthenticationCookie(response);
+        DateTimeOffset renewedExpiry = ParseCookieExpires(renewedHeader);
+        Assert.True(renewedExpiry > originalExpiry);
+        Assert.InRange(
+            renewedExpiry,
+            clock.GetUtcNow().AddDays(30).AddSeconds(-1),
+            clock.GetUtcNow().AddDays(30).AddSeconds(1));
+    }
+
+    [Fact]
+    public async Task ActiveSession_SlidesWithoutBecomingPersistent()
+    {
+        var clock = new MutableTimeProvider(
+            new DateTimeOffset(2026, 10, 15, 8, 0, 0, TimeSpan.Zero));
+        await using var factory = new AuthWebApplicationFactory(clock);
+        SeededUser user = await factory.CreateTeacherAsync();
+        using HttpClient loginClient = factory.CreateHttpsClient();
+        HttpResponseMessage login = await loginClient.PostAsJsonAsync(
+            "/api/auth/login",
+            new { user.Email, user.Password });
+        string cookie = CookiePair(GetAuthenticationCookie(login));
+        clock.Advance(TimeSpan.FromHours(5));
+        using HttpClient client = factory.CreateHttpsClient(handleCookies: false);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/auth/me");
+        request.Headers.Add("Cookie", cookie);
+
+        HttpResponseMessage response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        string renewedHeader = GetAuthenticationCookie(response);
+        Assert.DoesNotContain("expires=", renewedHeader, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("max-age=", renewedHeader, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Logout_EndsPersistentSession()
+    {
+        await using var factory = new AuthWebApplicationFactory();
+        SeededUser user = await factory.CreateTeacherAsync();
+        using HttpClient client = factory.CreateHttpsClient();
+        HttpResponseMessage login = await client.PostAsJsonAsync(
+            "/api/auth/login",
+            new { user.Email, user.Password, RememberMe = true });
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+
+        HttpResponseMessage logout =
+            await client.PostAsync("/api/auth/logout", content: null);
+        HttpResponseMessage me = await client.GetAsync("/api/auth/me");
+
+        Assert.Equal(HttpStatusCode.OK, logout.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, me.StatusCode);
     }
 
     [Fact]
@@ -132,5 +279,31 @@ public sealed class AuthEndpointsTests
             "/api/auth/login",
             new { user.Email, user.Password });
         response.EnsureSuccessStatusCode();
+    }
+
+    private static string GetAuthenticationCookie(HttpResponseMessage response) =>
+        Assert.Single(
+            response.Headers.GetValues("Set-Cookie"),
+            value => value.StartsWith("__Host-AnonPulse.Auth=", StringComparison.Ordinal));
+
+    private static string CookiePair(string setCookie) => setCookie.Split(';', 2)[0];
+
+    private static DateTimeOffset ParseCookieExpires(string setCookie)
+    {
+        string expires = Assert.Single(
+            setCookie.Split(';', StringSplitOptions.TrimEntries),
+            part => part.StartsWith("expires=", StringComparison.OrdinalIgnoreCase));
+        return DateTimeOffset.Parse(
+            expires["expires=".Length..],
+            System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan amount) => _utcNow = _utcNow.Add(amount);
     }
 }

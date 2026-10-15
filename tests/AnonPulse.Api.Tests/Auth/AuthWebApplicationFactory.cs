@@ -1,5 +1,6 @@
 using AnonPulse.Api.Data;
 using AnonPulse.Api.Models;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -11,7 +12,8 @@ using Xunit;
 
 namespace AnonPulse.Api.Tests.Auth;
 
-public sealed class AuthWebApplicationFactory : WebApplicationFactory<Program>
+public sealed class AuthWebApplicationFactory(TimeProvider? timeProvider = null)
+    : WebApplicationFactory<Program>
 {
     private readonly string _databaseName = $"auth-tests-{Guid.NewGuid()}";
 
@@ -25,15 +27,24 @@ public sealed class AuthWebApplicationFactory : WebApplicationFactory<Program>
             services.RemoveAll<IDbContextOptionsConfiguration<ApplicationDbContext>>();
             services.AddDbContext<ApplicationDbContext>(options =>
                 options.UseInMemoryDatabase(_databaseName));
+
+            if (timeProvider is not null)
+            {
+                services.RemoveAll<TimeProvider>();
+                services.AddSingleton(timeProvider);
+                services.PostConfigure<CookieAuthenticationOptions>(
+                    IdentityConstants.ApplicationScheme,
+                    options => options.TimeProvider = timeProvider);
+            }
         });
     }
 
-    public HttpClient CreateHttpsClient()
+    public HttpClient CreateHttpsClient(bool handleCookies = true)
     {
         return CreateClient(new WebApplicationFactoryClientOptions
         {
             BaseAddress = new Uri("https://localhost"),
-            HandleCookies = true,
+            HandleCookies = handleCookies,
             AllowAutoRedirect = false
         });
     }
@@ -43,6 +54,23 @@ public sealed class AuthWebApplicationFactory : WebApplicationFactory<Program>
         return await CreateUserAsync(
             $"teacher-{Guid.NewGuid()}@example.test",
             RoleNames.Teacher);
+    }
+
+    public async Task<SeededUser> CreateTwoFactorTeacherAsync()
+    {
+        SeededUser seededUser = await CreateTeacherAsync();
+        using IServiceScope scope = Services.CreateScope();
+        UserManager<ApplicationUser> userManager =
+            scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        ApplicationUser user = await userManager.FindByIdAsync(seededUser.Id.ToString())
+            ?? throw new InvalidOperationException("Seeded user was not found.");
+
+        IdentityResult authenticatorResult = await userManager.ResetAuthenticatorKeyAsync(user);
+        Assert.True(authenticatorResult.Succeeded, FormatErrors(authenticatorResult));
+        IdentityResult twoFactorResult = await userManager.SetTwoFactorEnabledAsync(user, true);
+        Assert.True(twoFactorResult.Succeeded, FormatErrors(twoFactorResult));
+
+        return seededUser;
     }
 
     public async Task<SeededUser> CreateUserAsync(

@@ -30,8 +30,17 @@ public sealed class AuthController(
             await signInManager.PasswordSignInAsync(
                 user,
                 request.Password,
-                isPersistent: false,
+                isPersistent: request.RememberMe,
                 lockoutOnFailure: true);
+
+        if (result.RequiresTwoFactor)
+        {
+            return Unauthorized(new ProblemDetails
+            {
+                Status = StatusCodes.Status401Unauthorized,
+                Title = "Two-factor authentication is required."
+            });
+        }
 
         if (!result.Succeeded)
         {

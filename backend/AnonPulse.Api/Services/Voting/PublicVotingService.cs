@@ -167,24 +167,11 @@ public sealed class PublicVotingService(
     {
         var errors = new Dictionary<string, string[]>();
         Dictionary<Guid, PollQuestion> questionById = questions.ToDictionary(item => item.Id);
-        HashSet<Guid> answeredQuestions = [];
-
-        if (answers.Count != questions.Count)
-        {
-            errors[nameof(SubmitVotesRequest.Answers)] =
-                ["Exactly one answer is required for every poll question."];
-        }
+        var selectedOptionsByQuestion = new Dictionary<Guid, HashSet<Guid>>();
 
         for (int index = 0; index < answers.Count; index++)
         {
             VoteAnswerRequest answer = answers[index]!;
-            if (!answeredQuestions.Add(answer.QuestionId))
-            {
-                errors[$"Answers[{index}].QuestionId"] =
-                    ["Each question may be answered only once."];
-                continue;
-            }
-
             if (!questionById.TryGetValue(answer.QuestionId, out PollQuestion? question))
             {
                 errors[$"Answers[{index}].QuestionId"] =
@@ -196,14 +183,36 @@ public sealed class PublicVotingService(
             {
                 errors[$"Answers[{index}].OptionId"] =
                     ["Option does not belong to the specified question."];
+                continue;
+            }
+
+            if (!selectedOptionsByQuestion.TryGetValue(
+                    question.Id,
+                    out HashSet<Guid>? selectedOptions))
+            {
+                selectedOptions = [];
+                selectedOptionsByQuestion.Add(question.Id, selectedOptions);
+            }
+
+            if (!selectedOptions.Add(answer.OptionId))
+            {
+                errors[$"Answers[{index}].OptionId"] =
+                    ["The same option may not be selected more than once."];
             }
         }
 
         foreach (PollQuestion question in questions)
         {
-            if (!answeredQuestions.Contains(question.Id))
+            int selectedCount = selectedOptionsByQuestion
+                .GetValueOrDefault(question.Id)?.Count ?? 0;
+            if (selectedCount == 0)
             {
                 errors[$"Questions[{question.Id}]"] = ["Question must be answered."];
+            }
+            else if (!question.AllowsMultipleAnswers && selectedCount != 1)
+            {
+                errors[$"Questions[{question.Id}]"] =
+                    ["Exactly one option must be selected for this question."];
             }
         }
 
@@ -257,6 +266,7 @@ public sealed class PublicVotingService(
                             option.Id,
                             option.Text,
                             option.Position))
-                        .ToArray()))
+                        .ToArray(),
+                    question.AllowsMultipleAnswers))
                 .ToArray());
 }

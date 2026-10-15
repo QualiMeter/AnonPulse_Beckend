@@ -11,7 +11,8 @@ public sealed record PollQuestionResultsResponse(
     Guid Id,
     string Text,
     int Position,
-    IReadOnlyList<PollOptionResultsResponse> Options);
+    IReadOnlyList<PollOptionResultsResponse> Options,
+    bool AllowsMultipleAnswers = false);
 
 public sealed record PollOptionResultsResponse(
     Guid Id,

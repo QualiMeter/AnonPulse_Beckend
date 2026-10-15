@@ -110,6 +110,27 @@ public sealed class PollResultsEndpointsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task MultipleChoicePercentages_UseParticipantsAsDenominator()
+    {
+        SeededResultsPoll poll = await SeedPollAsync(
+            PollStatus.Closed,
+            [[2, 1, 1]],
+            participants: 2,
+            allowsMultipleAnswers: [true]);
+        using HttpClient client = _factory.CreateHttpsClient();
+
+        PollResultsResponse? results = await client.GetFromJsonAsync<PollResultsResponse>(
+            $"/api/polls/{poll.Id}/results");
+
+        Assert.NotNull(results);
+        PollQuestionResultsResponse question = Assert.Single(results.Questions);
+        Assert.True(question.AllowsMultipleAnswers);
+        Assert.Equal([2, 1, 1], question.Options.Select(option => option.VoteCount));
+        Assert.Equal([100m, 50m, 50m], question.Options.Select(option => option.Percentage));
+        Assert.Equal(2, results.TotalParticipants);
+    }
+
+    [Fact]
     public async Task OpenPoll_EnforcesOwnerAndRoleAccess()
     {
         SeededUser owner = await CreateUserAsync(RoleNames.Teacher);
@@ -376,7 +397,8 @@ public sealed class PollResultsEndpointsTests : IAsyncLifetime
         IReadOnlyList<IReadOnlyList<int>> voteCounts,
         int participants,
         string? title = "Results test",
-        Guid? creatorId = null)
+        Guid? creatorId = null,
+        IReadOnlyList<bool>? allowsMultipleAnswers = null)
     {
         using IServiceScope scope = _factory.Services.CreateScope();
         ApplicationDbContext db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -406,7 +428,8 @@ public sealed class PollResultsEndpointsTests : IAsyncLifetime
                 Id = Guid.NewGuid(),
                 PollId = poll.Id,
                 Text = $"Question {questionIndex}",
-                Position = questionIndex
+                Position = questionIndex,
+                AllowsMultipleAnswers = allowsMultipleAnswers?[questionIndex] ?? false
             };
             var currentOptionIds = new List<Guid>();
             for (int optionIndex = voteCounts[questionIndex].Count - 1;

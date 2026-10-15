@@ -9,7 +9,8 @@ public sealed record PublicPollQuestionResponse(
     Guid Id,
     string Text,
     int Position,
-    IReadOnlyList<PublicPollOptionResponse> Options);
+    IReadOnlyList<PublicPollOptionResponse> Options,
+    bool AllowsMultipleAnswers = false);
 
 public sealed record PublicPollOptionResponse(
     Guid Id,

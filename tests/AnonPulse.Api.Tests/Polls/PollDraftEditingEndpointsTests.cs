@@ -59,7 +59,8 @@ public sealed class PollDraftEditingEndpointsTests : IAsyncLifetime
                     new
                     {
                         Text = " Second question ",
-                        Options = new[] { "Second A", "Second B", "Second C" }
+                        Options = new[] { "Second A", "Second B", "Second C" },
+                        AllowsMultipleAnswers = true
                     },
                     new
                     {
@@ -86,6 +87,8 @@ public sealed class PollDraftEditingEndpointsTests : IAsyncLifetime
         Assert.Equal(
             [0, 1, 2],
             updated.Questions[0].Options.Select(option => option.Position));
+        Assert.True(updated.Questions[0].AllowsMultipleAnswers);
+        Assert.False(updated.Questions[1].AllowsMultipleAnswers);
         Assert.DoesNotContain(originalQuestionId, updated.Questions.Select(item => item.Id));
         Assert.Empty(updated.Questions
             .SelectMany(question => question.Options)
@@ -101,6 +104,7 @@ public sealed class PollDraftEditingEndpointsTests : IAsyncLifetime
         Assert.Equal(owner.Id, stored.CreatorId);
         Assert.Equal(original.CreatedAt, stored.CreatedAt);
         Assert.Equal(2, stored.Questions.Count);
+        Assert.Single(stored.Questions, question => question.AllowsMultipleAnswers);
         Assert.Equal(5, stored.Questions.SelectMany(question => question.Options).Count());
     }
 

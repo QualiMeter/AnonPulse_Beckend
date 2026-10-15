@@ -4,4 +4,5 @@ public sealed record PollQuestionResponse(
     Guid Id,
     string Text,
     int Position,
-    IReadOnlyList<PollOptionResponse> Options);
+    IReadOnlyList<PollOptionResponse> Options,
+    bool AllowsMultipleAnswers = false);

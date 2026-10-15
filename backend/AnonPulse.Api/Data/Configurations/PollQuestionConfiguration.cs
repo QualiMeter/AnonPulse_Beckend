@@ -27,6 +27,10 @@ public sealed class PollQuestionConfiguration : IEntityTypeConfiguration<PollQue
             .HasColumnType("text")
             .IsRequired();
         builder.Property(question => question.Position).HasColumnName("position");
+        builder.Property(question => question.AllowsMultipleAnswers)
+            .HasColumnName("allows_multiple_answers")
+            .HasDefaultValue(false)
+            .IsRequired();
 
         builder.HasIndex(question => question.PollId);
         builder.HasIndex(question => new { question.PollId, question.Position })

@@ -106,6 +106,9 @@ public sealed class PollResultsService(ApplicationDbContext dbContext)
                 .ToArray();
             int totalQuestionVotes = options.Sum(option =>
                 voteCounts.GetValueOrDefault(option.Id));
+            int percentageDenominator = question.AllowsMultipleAnswers
+                ? totalParticipants
+                : totalQuestionVotes;
 
             questionResults.Add(new PollQuestionResultsResponse(
                 question.Id,
@@ -119,8 +122,9 @@ public sealed class PollResultsService(ApplicationDbContext dbContext)
                         option.Text,
                         option.Position,
                         voteCount,
-                        CalculatePercentage(voteCount, totalQuestionVotes));
-                }).ToArray()));
+                        CalculatePercentage(voteCount, percentageDenominator));
+                }).ToArray(),
+                question.AllowsMultipleAnswers));
         }
 
         return new PollResultsResult(

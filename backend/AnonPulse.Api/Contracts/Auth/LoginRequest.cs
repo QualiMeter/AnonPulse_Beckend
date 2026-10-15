@@ -4,4 +4,5 @@ namespace AnonPulse.Api.Contracts.Auth;
 
 public sealed record LoginRequest(
     [Required, EmailAddress] string Email,
-    [Required] string Password);
+    [Required] string Password,
+    bool RememberMe = false);

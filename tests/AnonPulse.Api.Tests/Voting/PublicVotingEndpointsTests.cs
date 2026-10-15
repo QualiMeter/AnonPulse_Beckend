@@ -93,6 +93,61 @@ public sealed class PublicVotingEndpointsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task MixedPoll_AllowsSeveralDistinctOptionsOnlyForMultipleChoiceQuestion()
+    {
+        SeededPoll poll = await SeedPollAsync(
+            PollStatus.Open,
+            [3, 2],
+            allowsMultipleAnswers: [true, false]);
+        using HttpClient client = _factory.CreateHttpsClient();
+        HttpResponseMessage getResponse =
+            await client.GetAsync($"/api/public/polls/{poll.Id}");
+        PublicPollResponse? publicPoll =
+            await getResponse.Content.ReadFromJsonAsync<PublicPollResponse>();
+
+        HttpResponseMessage response = await VoteAsync(
+            client,
+            poll.Id,
+            [
+                new(poll.QuestionIds[0], poll.OptionIds[0][0]),
+                new(poll.QuestionIds[0], poll.OptionIds[0][2]),
+                new(poll.QuestionIds[1], poll.OptionIds[1][1])
+            ]);
+
+        Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
+        Assert.NotNull(publicPoll);
+        Assert.True(publicPoll.Questions[0].AllowsMultipleAnswers);
+        Assert.False(publicPoll.Questions[1].AllowsMultipleAnswers);
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        await AssertStoredCountsAsync(poll.Id, votes: 3, participations: 1);
+    }
+
+    [Fact]
+    public async Task DuplicateMultipleChoiceOption_Returns400AndPersistsNothing()
+    {
+        SeededPoll poll = await SeedPollAsync(
+            PollStatus.Open,
+            [3],
+            allowsMultipleAnswers: [true]);
+        using HttpClient client = _factory.CreateHttpsClient();
+        await client.GetAsync($"/api/public/polls/{poll.Id}");
+
+        HttpResponseMessage response = await VoteAsync(
+            client,
+            poll.Id,
+            [
+                new(poll.QuestionIds[0], poll.OptionIds[0][1]),
+                new(poll.QuestionIds[0], poll.OptionIds[0][1])
+            ]);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(
+            "application/problem+json",
+            response.Content.Headers.ContentType?.MediaType);
+        await AssertStoredCountsAsync(poll.Id, votes: 0, participations: 0);
+    }
+
+    [Fact]
     public async Task InvalidAnswerSets_Return400AndPersistNothing()
     {
         SeededPoll poll = await SeedPollAsync(PollStatus.Open, [2, 2]);
@@ -197,6 +252,30 @@ public sealed class PublicVotingEndpointsTests : IAsyncLifetime
         Assert.Single(responses, item => item.StatusCode == HttpStatusCode.NoContent);
         Assert.Single(responses, item => item.StatusCode == HttpStatusCode.Conflict);
         await AssertStoredCountsAsync(poll.Id, 1, 1);
+    }
+
+    [Fact]
+    public async Task ConcurrentMultipleChoiceVotesWithSameCookie_PersistOneCompleteSet()
+    {
+        SeededPoll poll = await SeedPollAsync(
+            PollStatus.Open,
+            [3],
+            allowsMultipleAnswers: [true]);
+        using HttpClient client = _factory.CreateHttpsClient();
+        await client.GetAsync($"/api/public/polls/{poll.Id}");
+        VoteAnswerRequest[] answers =
+        [
+            new(poll.QuestionIds[0], poll.OptionIds[0][0]),
+            new(poll.QuestionIds[0], poll.OptionIds[0][2])
+        ];
+
+        HttpResponseMessage[] responses = await Task.WhenAll(
+            VoteAsync(client, poll.Id, answers),
+            VoteAsync(client, poll.Id, answers));
+
+        Assert.Single(responses, item => item.StatusCode == HttpStatusCode.NoContent);
+        Assert.Single(responses, item => item.StatusCode == HttpStatusCode.Conflict);
+        await AssertStoredCountsAsync(poll.Id, votes: 2, participations: 1);
     }
 
     [Fact]
@@ -431,7 +510,8 @@ public sealed class PublicVotingEndpointsTests : IAsyncLifetime
 
     private async Task<SeededPoll> SeedPollAsync(
         PollStatus status,
-        IReadOnlyList<int> optionCounts)
+        IReadOnlyList<int> optionCounts,
+        IReadOnlyList<bool>? allowsMultipleAnswers = null)
     {
         using IServiceScope scope = _factory.Services.CreateScope();
         ApplicationDbContext db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -460,7 +540,8 @@ public sealed class PublicVotingEndpointsTests : IAsyncLifetime
                 Id = Guid.NewGuid(),
                 PollId = poll.Id,
                 Text = $"Question {questionIndex}",
-                Position = questionIndex
+                Position = questionIndex,
+                AllowsMultipleAnswers = allowsMultipleAnswers?[questionIndex] ?? false
             };
             questionIds.Add(question.Id);
             var currentOptions = new List<Guid>();
