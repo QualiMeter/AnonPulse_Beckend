@@ -56,6 +56,23 @@ public sealed class AuthWebApplicationFactory(TimeProvider? timeProvider = null)
             RoleNames.Teacher);
     }
 
+    public async Task<SeededUser> CreateTwoFactorTeacherAsync()
+    {
+        SeededUser seededUser = await CreateTeacherAsync();
+        using IServiceScope scope = Services.CreateScope();
+        UserManager<ApplicationUser> userManager =
+            scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        ApplicationUser user = await userManager.FindByIdAsync(seededUser.Id.ToString())
+            ?? throw new InvalidOperationException("Seeded user was not found.");
+
+        IdentityResult authenticatorResult = await userManager.ResetAuthenticatorKeyAsync(user);
+        Assert.True(authenticatorResult.Succeeded, FormatErrors(authenticatorResult));
+        IdentityResult twoFactorResult = await userManager.SetTwoFactorEnabledAsync(user, true);
+        Assert.True(twoFactorResult.Succeeded, FormatErrors(twoFactorResult));
+
+        return seededUser;
+    }
+
     public async Task<SeededUser> CreateUserAsync(
         string email,
         string? role = null)

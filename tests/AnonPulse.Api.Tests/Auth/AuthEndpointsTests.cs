@@ -61,6 +61,32 @@ public sealed class AuthEndpointsTests
     }
 
     [Fact]
+    public async Task Login_WhenTwoFactorIsRequired_DoesNotIssueApplicationCookie()
+    {
+        await using var factory = new AuthWebApplicationFactory();
+        SeededUser user = await factory.CreateTwoFactorTeacherAsync();
+        using HttpClient client = factory.CreateHttpsClient();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/auth/login",
+            new { user.Email, user.Password, RememberMe = true });
+        HttpResponseMessage me = await client.GetAsync("/api/auth/me");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.DoesNotContain(
+            response.Headers.GetValues("Set-Cookie"),
+            value => value.StartsWith(
+                "__Host-AnonPulse.Auth=",
+                StringComparison.Ordinal));
+        Assert.Equal(HttpStatusCode.Unauthorized, me.StatusCode);
+
+        ProblemDetails? problem =
+            await response.Content.ReadFromJsonAsync<ProblemDetails>();
+        Assert.NotNull(problem);
+        Assert.Equal("Two-factor authentication is required.", problem.Title);
+    }
+
+    [Fact]
     public async Task SessionTicket_ExpiresAfterConfiguredServerLifetime()
     {
         var clock = new MutableTimeProvider(

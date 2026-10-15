@@ -154,7 +154,8 @@ builder.Services
     })
     .AddRoles<IdentityRole<Guid>>()
     .AddEntityFrameworkStores<ApplicationDbContext>()
-    .AddSignInManager();
+    .AddDefaultTokenProviders()
+    .AddSignInManager<ApplicationSignInManager>();
 builder.Services
     .AddAuthentication(options =>
     {
@@ -183,6 +184,18 @@ builder.Services
                 context.HttpContext,
                 StatusCodes.Status403Forbidden,
                 "Access is forbidden.");
+    })
+    .AddCookie(IdentityConstants.TwoFactorRememberMeScheme, options =>
+    {
+        options.Cookie.HttpOnly = true;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+        options.Cookie.SameSite = SameSiteMode.Strict;
+    })
+    .AddCookie(IdentityConstants.TwoFactorUserIdScheme, options =>
+    {
+        options.Cookie.HttpOnly = true;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+        options.Cookie.SameSite = SameSiteMode.Strict;
     });
 // Создаём приложение
 var app = builder.Build();
