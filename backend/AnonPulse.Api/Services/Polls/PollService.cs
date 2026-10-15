@@ -384,6 +384,7 @@ public sealed class PollService(
                 questions.Add(ValidateQuestion(
                     question.Text,
                     question.Options,
+                    question.AllowsMultipleAnswers,
                     $"Questions[{index}]",
                     errors));
             }
@@ -393,6 +394,7 @@ public sealed class PollService(
             questions.Add(ValidateQuestion(
                 request.Question,
                 request.Options,
+                allowsMultipleAnswers: false,
                 string.Empty,
                 errors));
         }
@@ -407,6 +409,7 @@ public sealed class PollService(
     private static ValidatedQuestion ValidateQuestion(
         string? questionText,
         IReadOnlyList<string?>? requestedOptions,
+        bool allowsMultipleAnswers,
         string prefix,
         IDictionary<string, string[]> errors)
     {
@@ -446,7 +449,7 @@ public sealed class PollService(
             }
         }
 
-        return new ValidatedQuestion(text, normalizedOptions);
+        return new ValidatedQuestion(text, normalizedOptions, allowsMultipleAnswers);
     }
 
     private static bool HasValidQuestions(Poll poll)
@@ -475,7 +478,8 @@ public sealed class PollService(
                 Id = Guid.NewGuid(),
                 PollId = poll.Id,
                 Text = validatedQuestion.Text,
-                Position = questionPosition
+                Position = questionPosition,
+                AllowsMultipleAnswers = validatedQuestion.AllowsMultipleAnswers
             };
 
             for (int optionPosition = 0;
@@ -524,7 +528,8 @@ public sealed class PollService(
                         option.Id,
                         option.Text,
                         option.Position))
-                    .ToArray()))
+                    .ToArray(),
+                question.AllowsMultipleAnswers))
             .ToArray();
         PollQuestionResponse? legacyQuestion = questions.Length == 1 ? questions[0] : null;
 
@@ -563,5 +568,6 @@ public sealed class PollService(
 
     private sealed record ValidatedQuestion(
         string Text,
-        IReadOnlyList<string> Options);
+        IReadOnlyList<string> Options,
+        bool AllowsMultipleAnswers);
 }

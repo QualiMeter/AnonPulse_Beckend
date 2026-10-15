@@ -1,8 +1,11 @@
 using AnonPulse.Api.Contracts.Auth;
 using AnonPulse.Api.Models;
+using AnonPulse.Api.Services.Authentication;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace AnonPulse.Api.Controllers;
 
@@ -11,7 +14,9 @@ namespace AnonPulse.Api.Controllers;
 public sealed class AuthController(
     UserManager<ApplicationUser> userManager,
     SignInManager<ApplicationUser> signInManager,
-    IPasswordHasher<ApplicationUser> passwordHasher) : ControllerBase
+    IPasswordHasher<ApplicationUser> passwordHasher,
+    TimeProvider timeProvider,
+    IOptions<AuthenticationSessionOptions> sessionOptions) : ControllerBase
 {
     [AllowAnonymous]
     [HttpPost("login")]
@@ -27,16 +32,25 @@ public sealed class AuthController(
         }
 
         Microsoft.AspNetCore.Identity.SignInResult result =
-            await signInManager.PasswordSignInAsync(
+            await signInManager.CheckPasswordSignInAsync(
                 user,
                 request.Password,
-                isPersistent: false,
                 lockoutOnFailure: true);
 
         if (!result.Succeeded)
         {
             return InvalidCredentials();
         }
+
+        TimeSpan lifetime = request.RememberMe
+            ? sessionOptions.Value.PersistentLifetime
+            : sessionOptions.Value.SessionLifetime;
+        await signInManager.SignInAsync(user, new AuthenticationProperties
+        {
+            IsPersistent = request.RememberMe,
+            AllowRefresh = true,
+            ExpiresUtc = timeProvider.GetUtcNow().Add(lifetime)
+        });
 
         return Ok(await CreateCurrentUserResponseAsync(user));
     }

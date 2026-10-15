@@ -4,6 +4,7 @@ using AnonPulse.Api.Data;
 using AnonPulse.Api.Development;
 using AnonPulse.Api.Models;
 using AnonPulse.Api.Services.Decisions;
+using AnonPulse.Api.Services.Authentication;
 using AnonPulse.Api.Services.Polls;
 using AnonPulse.Api.Services.PollResults;
 using AnonPulse.Api.Services.Voting;
@@ -72,6 +73,17 @@ builder.Services.AddCors(options =>
             .AllowCredentials());
 });
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddOptions<AuthenticationSessionOptions>()
+    .Bind(builder.Configuration.GetSection(AuthenticationSessionOptions.SectionName))
+    .Validate(options => options.SessionLifetime > TimeSpan.Zero,
+        "Authentication session lifetime must be greater than zero.")
+    .Validate(options => options.PersistentLifetime > TimeSpan.Zero,
+        "Persistent authentication lifetime must be greater than zero.")
+    .Validate(options =>
+            options.PersistentLifetime <=
+            AuthenticationSessionOptions.MaximumPersistentLifetime,
+        "Persistent authentication lifetime must not exceed 30 days.")
+    .ValidateOnStart();
 builder.Services.AddScoped<IDecisionService, DecisionService>();
 builder.Services.AddScoped<IPollService, PollService>();
 builder.Services.AddScoped<IPollResultsService, PollResultsService>();
@@ -157,7 +169,9 @@ builder.Services
         options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
         options.Cookie.SameSite = SameSiteMode.Strict;
         options.Cookie.Path = "/";
-        options.ExpireTimeSpan = TimeSpan.FromHours(8);
+        options.ExpireTimeSpan = builder.Configuration.GetValue<TimeSpan?>(
+            $"{AuthenticationSessionOptions.SectionName}:SessionLifetime") ??
+            TimeSpan.FromHours(8);
         options.SlidingExpiration = true;
         options.Events.OnRedirectToLogin = context =>
             WriteAuthenticationProblemAsync(

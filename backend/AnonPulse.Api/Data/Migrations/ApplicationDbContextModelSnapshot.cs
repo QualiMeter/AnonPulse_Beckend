@@ -214,6 +214,12 @@ namespace AnonPulse.Api.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<bool>("AllowsMultipleAnswers")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("allows_multiple_answers");
+
                     b.Property<Guid>("PollId")
                         .HasColumnType("uuid")
                         .HasColumnName("poll_id");

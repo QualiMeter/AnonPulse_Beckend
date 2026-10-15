@@ -35,7 +35,7 @@ public sealed class VotingConcurrencyTests : IAsyncLifetime
     [Fact]
     public async Task SaveFailure_RollsBackParticipationAndAllVotes()
     {
-        SeededPoll poll = await SeedOpenPollAsync();
+        SeededPoll poll = await SeedOpenPollAsync(allowsMultipleAnswers: true);
         var failingOptions = new DbContextOptionsBuilder<ApplicationDbContext>()
             .UseNpgsql(_postgres.GetConnectionString())
             .AddInterceptors(new ThrowAfterSaveInterceptor())
@@ -107,7 +107,7 @@ public sealed class VotingConcurrencyTests : IAsyncLifetime
             TimeProvider.System,
             Options.Create(new AnonymousVoterOptions()));
 
-    private async Task<SeededPoll> SeedOpenPollAsync()
+    private async Task<SeededPoll> SeedOpenPollAsync(bool allowsMultipleAnswers = false)
     {
         await using var db = new ApplicationDbContext(_options);
         var teacher = new ApplicationUser
@@ -129,7 +129,8 @@ public sealed class VotingConcurrencyTests : IAsyncLifetime
             Id = Guid.NewGuid(),
             PollId = poll.Id,
             Position = 0,
-            Text = "Question"
+            Text = "Question",
+            AllowsMultipleAnswers = allowsMultipleAnswers
         };
         var option = new PollOption
         {
@@ -139,28 +140,41 @@ public sealed class VotingConcurrencyTests : IAsyncLifetime
             Text = "First"
         };
         question.Options.Add(option);
-        question.Options.Add(new PollOption
+        var secondOption = new PollOption
         {
             Id = Guid.NewGuid(),
             QuestionId = question.Id,
             Position = 1,
             Text = "Second"
-        });
+        };
+        question.Options.Add(secondOption);
         poll.Questions.Add(question);
         db.Users.Add(teacher);
         db.Polls.Add(poll);
         await db.SaveChangesAsync();
-        return new SeededPoll(poll.Id, teacher.Id, question.Id, option.Id);
+        return new SeededPoll(
+            poll.Id,
+            teacher.Id,
+            question.Id,
+            option.Id,
+            allowsMultipleAnswers ? secondOption.Id : null);
     }
 
     private static SubmitVotesRequest ValidRequest(SeededPoll poll) =>
-        new([new VoteAnswerRequest(poll.QuestionId, poll.OptionId)]);
+        new(
+        [
+            new VoteAnswerRequest(poll.QuestionId, poll.OptionId),
+            .. poll.SecondOptionId is Guid secondOptionId
+                ? new[] { new VoteAnswerRequest(poll.QuestionId, secondOptionId) }
+                : []
+        ]);
 
     private sealed record SeededPoll(
         Guid Id,
         Guid TeacherId,
         Guid QuestionId,
-        Guid OptionId);
+        Guid OptionId,
+        Guid? SecondOptionId);
 
     private sealed class ThrowAfterSaveInterceptor : SaveChangesInterceptor
     {

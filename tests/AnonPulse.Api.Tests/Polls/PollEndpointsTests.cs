@@ -73,7 +73,8 @@ public sealed class PollEndpointsTests
                     new
                     {
                         Text = " Насколько   понятен материал? ",
-                        Options = new[] { "Полностью", " Частично ", "Непонятен" }
+                        Options = new[] { "Полностью", " Частично ", "Непонятен" },
+                        AllowsMultipleAnswers = true
                     },
                     new
                     {
@@ -96,6 +97,8 @@ public sealed class PollEndpointsTests
             ["Полностью", "Частично", "Непонятен"],
             poll.Questions[0].Options.Select(option => option.Text));
         Assert.Equal([0, 1, 2], poll.Questions[0].Options.Select(option => option.Position));
+        Assert.True(poll.Questions[0].AllowsMultipleAnswers);
+        Assert.False(poll.Questions[1].AllowsMultipleAnswers);
         Assert.Null(poll.Question);
         Assert.Empty(poll.Options);
 
@@ -103,6 +106,7 @@ public sealed class PollEndpointsTests
         ApplicationDbContext dbContext =
             scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
         Assert.Equal(2, dbContext.PollQuestions.Count());
+        Assert.Single(dbContext.PollQuestions, question => question.AllowsMultipleAnswers);
         Assert.Equal(5, dbContext.PollOptions.Count());
     }
 
