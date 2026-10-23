@@ -22,6 +22,56 @@ namespace AnonPulse.Api.Data.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("AnonPulse.Api.Models.AdminAuditEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ActionType")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("action_type");
+
+                    b.Property<Guid>("AdministratorId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("administrator_id");
+
+                    b.Property<string>("MetadataJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("metadata");
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at");
+
+                    b.Property<Guid?>("TargetId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("target_id");
+
+                    b.Property<string>("TargetType")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("target_type");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AdministratorId")
+                        .HasDatabaseName("ix_admin_audit_events_administrator_id");
+
+                    b.HasIndex("OccurredAt")
+                        .HasDatabaseName("ix_admin_audit_events_occurred_at");
+
+                    b.HasIndex("TargetType", "TargetId")
+                        .HasDatabaseName("ix_admin_audit_events_target");
+
+                    b.ToTable("admin_audit_events", (string)null);
+                });
+
             modelBuilder.Entity("AnonPulse.Api.Models.ApplicationUser", b =>
                 {
                     b.Property<Guid>("Id")
@@ -41,6 +91,12 @@ namespace AnonPulse.Api.Data.Migrations
 
                     b.Property<bool>("EmailConfirmed")
                         .HasColumnType("boolean");
+
+                    b.Property<bool>("IsAdministrativelyDeactivated")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false)
+                        .HasColumnName("is_administratively_deactivated");
 
                     b.Property<bool>("LockoutEnabled")
                         .HasColumnType("boolean");

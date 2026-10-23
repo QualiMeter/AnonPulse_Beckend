@@ -25,6 +25,12 @@ public sealed class ApplicationSignInManager(
         schemes,
         confirmation)
 {
+    public override async Task<bool> CanSignInAsync(ApplicationUser user)
+    {
+        return !user.IsAdministrativelyDeactivated &&
+               await base.CanSignInAsync(user);
+    }
+
     public override Task SignInWithClaimsAsync(
         ApplicationUser user,
         bool isPersistent,
