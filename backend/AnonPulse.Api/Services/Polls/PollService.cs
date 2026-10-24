@@ -110,7 +110,11 @@ public sealed class PollService(
                     .Collection(item => item.Questions)
                     .Query()
                     .Include(question => question.Options)
+                    .Include(question => question.KnowledgeSettings)
                     .LoadAsync(cancellationToken);
+                dbContext.PollQuestionKnowledgeSettings.RemoveRange(
+                    poll.Questions.Where(question => question.KnowledgeSettings is not null)
+                        .Select(question => question.KnowledgeSettings!));
                 dbContext.PollOptions.RemoveRange(
                     poll.Questions.SelectMany(question => question.Options));
                 dbContext.PollQuestions.RemoveRange(poll.Questions);
@@ -138,6 +142,9 @@ public sealed class PollService(
             }
             else
             {
+                dbContext.PollQuestionKnowledgeSettings.RemoveRange(
+                    poll.Questions.Where(question => question.KnowledgeSettings is not null)
+                        .Select(question => question.KnowledgeSettings!));
                 dbContext.PollOptions.RemoveRange(
                     poll.Questions.SelectMany(question => question.Options));
                 dbContext.PollQuestions.RemoveRange(poll.Questions);
@@ -226,6 +233,7 @@ public sealed class PollService(
                     .Collection(item => item.Questions)
                     .Query()
                     .Include(question => question.Options)
+                    .Include(question => question.KnowledgeSettings)
                     .LoadAsync(cancellationToken);
             }
         }
@@ -268,8 +276,8 @@ public sealed class PollService(
             }
 
             return Conflict(
-                "Poll must contain at least one valid question with at least two " +
-                "non-empty unique options before publication.");
+                "Poll must contain at least one valid question; choice questions require " +
+                "at least two non-empty unique options and text questions require a purpose.");
         }
 
         DateTime utcNow = timeProvider.GetUtcNow().UtcDateTime;
@@ -325,6 +333,8 @@ public sealed class PollService(
         return polls
             .Include(poll => poll.Questions)
             .ThenInclude(question => question.Options)
+            .Include(poll => poll.Questions)
+            .ThenInclude(question => question.KnowledgeSettings)
             .AsSplitQuery();
     }
 
@@ -385,6 +395,9 @@ public sealed class PollService(
                     question.Text,
                     question.Options,
                     question.AllowsMultipleAnswers,
+                    question.Type,
+                    question.TextPurpose,
+                    question.KnowledgeSettings,
                     $"Questions[{index}]",
                     errors));
             }
@@ -394,7 +407,10 @@ public sealed class PollService(
             questions.Add(ValidateQuestion(
                 request.Question,
                 request.Options,
-                allowsMultipleAnswers: false,
+                allowsMultipleAnswers: null,
+                type: null,
+                textPurpose: null,
+                knowledgeSettings: null,
                 string.Empty,
                 errors));
         }
@@ -409,7 +425,10 @@ public sealed class PollService(
     private static ValidatedQuestion ValidateQuestion(
         string? questionText,
         IReadOnlyList<string?>? requestedOptions,
-        bool allowsMultipleAnswers,
+        bool? allowsMultipleAnswers,
+        string? type,
+        string? textPurpose,
+        KnowledgeQuestionSettingsRequest? knowledgeSettings,
         string prefix,
         IDictionary<string, string[]> errors)
     {
@@ -422,10 +441,51 @@ public sealed class PollService(
             errors[textKey] = ["Question must not be empty."];
         }
 
+        PollQuestionType resolvedType = ResolveType(
+            type, allowsMultipleAnswers, prefix, errors);
+        string purposeKey = prefix.Length == 0 ? "TextPurpose" : $"{prefix}.TextPurpose";
+        string settingsKey = prefix.Length == 0 ? "KnowledgeSettings" : $"{prefix}.KnowledgeSettings";
+        TextQuestionPurpose? resolvedPurpose = null;
+        ValidatedKnowledgeSettings? validatedSettings = null;
         IReadOnlyList<string?> options = requestedOptions ?? [];
-        if (options.Count < 2)
+
+        if (resolvedType == PollQuestionType.Text)
         {
-            errors[optionsKey] = ["At least two options are required."];
+            if (options.Count > 0)
+            {
+                errors[optionsKey] = ["Text questions must not contain options."];
+            }
+
+            resolvedPurpose = textPurpose?.Trim().ToLowerInvariant() switch
+            {
+                "feedback" => TextQuestionPurpose.Feedback,
+                "knowledge" => TextQuestionPurpose.Knowledge,
+                _ => null
+            };
+            if (resolvedPurpose is null)
+            {
+                errors[purposeKey] = ["TextPurpose must be 'feedback' or 'knowledge'."];
+            }
+
+            if (resolvedPurpose == TextQuestionPurpose.Knowledge)
+            {
+                validatedSettings = ValidateKnowledgeSettings(knowledgeSettings, settingsKey, errors);
+            }
+            else if (knowledgeSettings is not null)
+            {
+                errors[settingsKey] = ["KnowledgeSettings are allowed only for knowledge questions."];
+            }
+        }
+        else
+        {
+            if (textPurpose is not null || knowledgeSettings is not null)
+            {
+                errors[purposeKey] = ["Text settings are allowed only for text questions."];
+            }
+            if (options.Count < 2)
+            {
+                errors[optionsKey] = ["At least two options are required."];
+            }
         }
 
         var normalizedOptions = new List<string>(options.Count);
@@ -449,19 +509,85 @@ public sealed class PollService(
             }
         }
 
-        return new ValidatedQuestion(text, normalizedOptions, allowsMultipleAnswers);
+        return new ValidatedQuestion(
+            text, normalizedOptions, resolvedType, resolvedPurpose, validatedSettings);
+    }
+
+    private static PollQuestionType ResolveType(
+        string? type,
+        bool? allowsMultipleAnswers,
+        string prefix,
+        IDictionary<string, string[]> errors)
+    {
+        string key = prefix.Length == 0 ? "Type" : $"{prefix}.Type";
+        PollQuestionType resolved;
+        if (type is null)
+        {
+            return allowsMultipleAnswers == true
+                ? PollQuestionType.MultipleChoice
+                : PollQuestionType.SingleChoice;
+        }
+
+        resolved = type.Trim().ToLowerInvariant() switch
+        {
+            "single_choice" => PollQuestionType.SingleChoice,
+            "multiple_choice" => PollQuestionType.MultipleChoice,
+            "text" => PollQuestionType.Text,
+            _ => PollQuestionType.SingleChoice
+        };
+        if (type.Trim().ToLowerInvariant() is not ("single_choice" or "multiple_choice" or "text"))
+        {
+            errors[key] = ["Type must be 'single_choice', 'multiple_choice', or 'text'."];
+            return resolved;
+        }
+
+        bool expectedLegacy = resolved == PollQuestionType.MultipleChoice;
+        if (allowsMultipleAnswers is not null && allowsMultipleAnswers != expectedLegacy)
+        {
+            errors[key] = ["Type conflicts with allowsMultipleAnswers."];
+        }
+        return resolved;
+    }
+
+    private static ValidatedKnowledgeSettings? ValidateKnowledgeSettings(
+        KnowledgeQuestionSettingsRequest? settings,
+        string key,
+        IDictionary<string, string[]> errors)
+    {
+        if (settings is null)
+        {
+            errors[key] = ["KnowledgeSettings are required for knowledge questions."];
+            return null;
+        }
+        string expected = settings.ExpectedAnswer?.Trim() ?? string.Empty;
+        string criteria = settings.GradingCriteria?.Trim() ?? string.Empty;
+        if (expected.Length is 0 or > 4000)
+        {
+            errors[$"{key}.ExpectedAnswer"] = ["ExpectedAnswer must contain 1 to 4000 characters."];
+        }
+        if (criteria.Length is 0 or > 4000)
+        {
+            errors[$"{key}.GradingCriteria"] = ["GradingCriteria must contain 1 to 4000 characters."];
+        }
+        if (settings.MaxScore is null or < 1 or > 100)
+        {
+            errors[$"{key}.MaxScore"] = ["MaxScore must be between 1 and 100."];
+        }
+        return new ValidatedKnowledgeSettings(expected, criteria, settings.MaxScore ?? 0);
     }
 
     private static bool HasValidQuestions(Poll poll)
     {
         return poll.Questions.Count > 0 && poll.Questions.All(question =>
             !string.IsNullOrWhiteSpace(question.Text) &&
-            question.Options.Count >= 2 &&
-            question.Options.All(option => !string.IsNullOrWhiteSpace(option.Text)) &&
-            question.Options
-                .Select(option => NormalizeWhitespace(option.Text))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Count() == question.Options.Count);
+            (question.Type == PollQuestionType.Text
+                ? question.TextPurpose is not null && question.Options.Count == 0 &&
+                  (question.TextPurpose != TextQuestionPurpose.Knowledge ||
+                   question.KnowledgeSettings is not null)
+                : question.Options.Count >= 2 &&
+                  question.Options.All(option => !string.IsNullOrWhiteSpace(option.Text)) &&
+                  question.Options.Select(option => NormalizeWhitespace(option.Text))
+                      .Distinct(StringComparer.OrdinalIgnoreCase).Count() == question.Options.Count));
     }
 
     private static void ReplaceContents(
@@ -479,8 +605,21 @@ public sealed class PollService(
                 PollId = poll.Id,
                 Text = validatedQuestion.Text,
                 Position = questionPosition,
-                AllowsMultipleAnswers = validatedQuestion.AllowsMultipleAnswers
+                Type = validatedQuestion.Type,
+                AllowsMultipleAnswers = validatedQuestion.Type == PollQuestionType.MultipleChoice,
+                TextPurpose = validatedQuestion.TextPurpose
             };
+
+            if (validatedQuestion.KnowledgeSettings is not null)
+            {
+                question.KnowledgeSettings = new PollQuestionKnowledgeSettings
+                {
+                    QuestionId = question.Id,
+                    ExpectedAnswer = validatedQuestion.KnowledgeSettings.ExpectedAnswer,
+                    GradingCriteria = validatedQuestion.KnowledgeSettings.GradingCriteria,
+                    MaxScore = validatedQuestion.KnowledgeSettings.MaxScore
+                };
+            }
 
             for (int optionPosition = 0;
                  optionPosition < validatedQuestion.Options.Count;
@@ -529,7 +668,13 @@ public sealed class PollService(
                         option.Text,
                         option.Position))
                     .ToArray(),
-                question.AllowsMultipleAnswers))
+                question.Type == PollQuestionType.MultipleChoice,
+                question.Type.ToApiValue(),
+                question.TextPurpose.ToApiValue(),
+                question.KnowledgeSettings is null ? null : new KnowledgeQuestionSettingsResponse(
+                    question.KnowledgeSettings.ExpectedAnswer,
+                    question.KnowledgeSettings.GradingCriteria,
+                    question.KnowledgeSettings.MaxScore)))
             .ToArray();
         PollQuestionResponse? legacyQuestion = questions.Length == 1 ? questions[0] : null;
 
@@ -569,5 +714,12 @@ public sealed class PollService(
     private sealed record ValidatedQuestion(
         string Text,
         IReadOnlyList<string> Options,
-        bool AllowsMultipleAnswers);
+        PollQuestionType Type,
+        TextQuestionPurpose? TextPurpose,
+        ValidatedKnowledgeSettings? KnowledgeSettings);
+
+    private sealed record ValidatedKnowledgeSettings(
+        string ExpectedAnswer,
+        string GradingCriteria,
+        int MaxScore);
 }

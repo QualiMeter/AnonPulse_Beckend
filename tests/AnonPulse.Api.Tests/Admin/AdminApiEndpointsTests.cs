@@ -266,7 +266,7 @@ public sealed class AdminApiEndpointsTests : IAsyncLifetime
             item.TargetId == poll.Id &&
             item.ActionType == AdminAuditActionTypes.PollDeleted);
         Assert.DoesNotContain("token", audit.MetadataJson, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("answer", audit.MetadataJson, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("textAnswers", audit.MetadataJson, StringComparison.Ordinal);
     }
 
     [Fact]

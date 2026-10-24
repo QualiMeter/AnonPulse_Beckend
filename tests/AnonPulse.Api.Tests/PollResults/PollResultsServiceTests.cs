@@ -54,6 +54,20 @@ public sealed class PollResultsServiceTests
         question.Options.Add(firstOption);
         question.Options.Add(secondOption);
         poll.Questions.Add(question);
+        var textQuestion = new PollQuestion
+        {
+            Id = Guid.NewGuid(),
+            PollId = poll.Id,
+            Text = "Feedback",
+            Position = 1,
+            Type = PollQuestionType.Text,
+            TextPurpose = TextQuestionPurpose.Feedback
+        };
+        textQuestion.TextAnswers.Add(new PollTextAnswer
+        { Id = Guid.NewGuid(), QuestionId = textQuestion.Id, Text = "One" });
+        textQuestion.TextAnswers.Add(new PollTextAnswer
+        { Id = Guid.NewGuid(), QuestionId = textQuestion.Id, Text = "Two" });
+        poll.Questions.Add(textQuestion);
         firstOption.Votes.Add(NewVote(firstOption.Id));
         for (int index = 0; index < 5; index++)
         {
@@ -84,6 +98,10 @@ public sealed class PollResultsServiceTests
         Assert.Equal(
             [16.67m, 83.33m],
             result.Results.Questions[0].Options.Select(x => x.Percentage));
+        Assert.Equal("text", result.Results.Questions[1].Type);
+        Assert.Equal("feedback", result.Results.Questions[1].TextPurpose);
+        Assert.Equal(2, result.Results.Questions[1].TextAnswerCount);
+        Assert.Empty(result.Results.Questions[1].Options);
     }
 
     private static Vote NewVote(Guid optionId) => new()

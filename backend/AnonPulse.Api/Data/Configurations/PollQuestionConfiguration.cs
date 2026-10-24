@@ -16,6 +16,16 @@ public sealed class PollQuestionConfiguration : IEntityTypeConfiguration<PollQue
             tableBuilder.HasCheckConstraint(
                 "ck_poll_questions_position_nonnegative",
                 "position >= 0");
+            tableBuilder.HasCheckConstraint(
+                "ck_poll_questions_type",
+                "question_type IN ('single_choice', 'multiple_choice', 'text')");
+            tableBuilder.HasCheckConstraint(
+                "ck_poll_questions_type_legacy_consistent",
+                "(question_type = 'multiple_choice') = allows_multiple_answers");
+            tableBuilder.HasCheckConstraint(
+                "ck_poll_questions_text_purpose",
+                "(question_type = 'text' AND text_purpose IN ('feedback', 'knowledge')) OR " +
+                "(question_type <> 'text' AND text_purpose IS NULL)");
         });
 
         builder.HasKey(question => question.Id);
@@ -31,6 +41,23 @@ public sealed class PollQuestionConfiguration : IEntityTypeConfiguration<PollQue
             .HasColumnName("allows_multiple_answers")
             .HasDefaultValue(false)
             .IsRequired();
+        builder.Property(question => question.Type)
+            .HasColumnName("question_type")
+            .HasConversion(
+                value => value.ToApiValue(),
+                value => value == "multiple_choice" ? PollQuestionType.MultipleChoice :
+                    value == "text" ? PollQuestionType.Text : PollQuestionType.SingleChoice)
+            .HasMaxLength(32)
+            .HasDefaultValue(PollQuestionType.SingleChoice)
+            .IsRequired();
+        builder.Property(question => question.TextPurpose)
+            .HasColumnName("text_purpose")
+            .HasConversion(
+                value => value == TextQuestionPurpose.Feedback ? "feedback" :
+                    value == TextQuestionPurpose.Knowledge ? "knowledge" : null,
+                value => value == "feedback" ? TextQuestionPurpose.Feedback :
+                    value == "knowledge" ? TextQuestionPurpose.Knowledge : null)
+            .HasMaxLength(16);
 
         builder.HasIndex(question => question.PollId);
         builder.HasIndex(question => new { question.PollId, question.Position })

@@ -111,6 +111,52 @@ public sealed class PollEndpointsTests
     }
 
     [Fact]
+    public async Task Create_MixedPoll_ReturnsTypesAndKeepsKnowledgeSettingsPrivateFromPublicApi()
+    {
+        await using var factory = new AuthWebApplicationFactory();
+        SeededUser teacher = await factory.CreateTeacherAsync();
+        using HttpClient client = factory.CreateHttpsClient();
+        await LoginAsync(client, teacher);
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/polls", new
+        {
+            title = "Mixed",
+            questions = new object[]
+            {
+                new { text = "Choice", type = "single_choice", options = new[] { "A", "B" } },
+                new { text = "Feedback", type = "text", textPurpose = "feedback", options = Array.Empty<string>() },
+                new
+                {
+                    text = "Knowledge", type = "text", textPurpose = "knowledge",
+                    knowledgeSettings = new { expectedAnswer = "Expected", gradingCriteria = "Criteria", maxScore = 10 }
+                }
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        PollResponse poll = (await response.Content.ReadFromJsonAsync<PollResponse>())!;
+        Assert.Equal(["single_choice", "text", "text"], poll.Questions.Select(q => q.Type));
+        Assert.Empty(poll.Questions[1].Options);
+        Assert.NotNull(poll.Questions[2].KnowledgeSettings);
+        using IServiceScope scope = factory.Services.CreateScope();
+        ApplicationDbContext db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.Equal(2, db.PollQuestions.Count(q => q.Type == PollQuestionType.Text));
+        Assert.Single(db.PollQuestionKnowledgeSettings);
+    }
+
+    [Fact]
+    public async Task Create_ConflictingTypeAndLegacyFlag_Returns400()
+    {
+        await AssertInvalidRequestAsync(new
+        {
+            questions = new[]
+            {
+                new { text = "Question", type = "multiple_choice", allowsMultipleAnswers = false,
+                    options = new[] { "A", "B" } }
+            }
+        }, "Questions[0].Type");
+    }
+
+    [Fact]
     public async Task Create_WithoutQuestions_ReturnsValidationProblem()
     {
         await AssertInvalidRequestAsync(

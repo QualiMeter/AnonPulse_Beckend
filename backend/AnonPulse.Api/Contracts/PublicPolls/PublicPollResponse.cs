@@ -10,7 +10,9 @@ public sealed record PublicPollQuestionResponse(
     string Text,
     int Position,
     IReadOnlyList<PublicPollOptionResponse> Options,
-    bool AllowsMultipleAnswers = false);
+    bool AllowsMultipleAnswers = false,
+    string Type = "single_choice",
+    string? TextPurpose = null);
 
 public sealed record PublicPollOptionResponse(
     Guid Id,
