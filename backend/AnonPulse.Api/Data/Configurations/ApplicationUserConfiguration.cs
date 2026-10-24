@@ -9,5 +9,10 @@ public sealed class ApplicationUserConfiguration : IEntityTypeConfiguration<Appl
     public void Configure(EntityTypeBuilder<ApplicationUser> builder)
     {
         builder.ToTable("users");
+
+        builder.Property(user => user.IsAdministrativelyDeactivated)
+            .HasColumnName("is_administratively_deactivated")
+            .HasDefaultValue(false)
+            .IsRequired();
     }
 }

@@ -3,6 +3,7 @@ using AnonPulse.Api.Bootstrap;
 using AnonPulse.Api.Data;
 using AnonPulse.Api.Development;
 using AnonPulse.Api.Models;
+using AnonPulse.Api.Services.Admin;
 using AnonPulse.Api.Services.Decisions;
 using AnonPulse.Api.Services.Authentication;
 using AnonPulse.Api.Services.Polls;
@@ -50,6 +51,15 @@ var builder = WebApplication.CreateBuilder(applicationArguments);
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 builder.Services.AddAuthorization();
+builder.Services.AddAntiforgery(options =>
+{
+    options.HeaderName = "X-CSRF-TOKEN";
+    options.Cookie.Name = "__Host-AnonPulse.Csrf";
+    options.Cookie.HttpOnly = true;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+    options.Cookie.SameSite = SameSiteMode.Strict;
+    options.Cookie.Path = "/";
+});
 // CORS is needed only for browser clients hosted on a different origin.
 // The Scalar UI served at /scalar/ is same-origin and does not need CORS.
 // Add other trusted frontend origins via Cors__AllowedOrigins__0, __1, etc.
@@ -85,6 +95,12 @@ builder.Services.AddOptions<AuthenticationSessionOptions>()
         "Persistent authentication lifetime must not exceed 30 days.")
     .ValidateOnStart();
 builder.Services.AddScoped<IDecisionService, DecisionService>();
+builder.Services.AddScoped<IAdminAccessChecker, AdminAccessChecker>();
+builder.Services.AddScoped<IAdminDashboardService, AdminDashboardService>();
+builder.Services.AddScoped<IAdminUserService, AdminUserService>();
+builder.Services.AddScoped<IAdminPollService, AdminPollService>();
+builder.Services.AddScoped<IPollDeletionService, PollDeletionService>();
+builder.Services.AddScoped<IAdminAuditService, AdminAuditService>();
 builder.Services.AddScoped<IPollService, PollService>();
 builder.Services.AddScoped<IPollResultsService, PollResultsService>();
 builder.Services.AddScoped<IPublicVotingService, PublicVotingService>();
@@ -156,6 +172,8 @@ builder.Services
     .AddEntityFrameworkStores<ApplicationDbContext>()
     .AddDefaultTokenProviders()
     .AddSignInManager<ApplicationSignInManager>();
+builder.Services.Configure<SecurityStampValidatorOptions>(options =>
+    options.ValidationInterval = TimeSpan.Zero);
 builder.Services
     .AddAuthentication(options =>
     {
@@ -174,6 +192,8 @@ builder.Services
             $"{AuthenticationSessionOptions.SectionName}:SessionLifetime") ??
             TimeSpan.FromHours(8);
         options.SlidingExpiration = true;
+        options.Events.OnValidatePrincipal =
+            AdministrativeDeactivationCookieValidator.ValidateAsync;
         options.Events.OnRedirectToLogin = context =>
             WriteAuthenticationProblemAsync(
                 context.HttpContext,

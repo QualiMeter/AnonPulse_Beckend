@@ -1,6 +1,8 @@
 using System.Security.Claims;
 using AnonPulse.Api.Contracts.Polls;
 using AnonPulse.Api.Models;
+using AnonPulse.Api.Security;
+using AnonPulse.Api.Services.Admin;
 using AnonPulse.Api.Services.Polls;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -9,7 +11,9 @@ namespace AnonPulse.Api.Controllers;
 
 [ApiController]
 [Route("api/polls")]
-public sealed class PollsController(IPollService pollService) : ControllerBase
+public sealed class PollsController(
+    IPollService pollService,
+    IPollDeletionService deletionService) : ControllerBase
 {
     [HttpPost]
     [Authorize(Roles = RoleNames.Teacher)]
@@ -124,6 +128,42 @@ public sealed class PollsController(IPollService pollService) : ControllerBase
             }),
             _ => throw new InvalidOperationException(
                 $"Unknown poll update outcome: {result.Outcome}.")
+        };
+    }
+
+    [HttpDelete("{id:guid}")]
+    [Authorize(Roles = RoleNames.Teacher)]
+    [ValidateCsrfToken]
+    public async Task<IActionResult> Delete(
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetCurrentUserId(out Guid teacherId))
+        {
+            return Unauthorized();
+        }
+
+        PollDeletionResult result = await deletionService.DeleteTeacherDraftAsync(
+            teacherId,
+            id,
+            cancellationToken);
+        return result.Outcome switch
+        {
+            PollDeletionOutcome.Succeeded => NoContent(),
+            PollDeletionOutcome.NotFound => NotFound(new ProblemDetails
+            {
+                Status = StatusCodes.Status404NotFound,
+                Title = "Poll was not found."
+            }),
+            PollDeletionOutcome.Conflict => Conflict(new ProblemDetails
+            {
+                Status = StatusCodes.Status409Conflict,
+                Title = "Poll cannot be deleted.",
+                Detail = result.Error,
+                Extensions = { ["code"] = result.Code }
+            }),
+            _ => throw new InvalidOperationException(
+                $"Unknown poll deletion outcome: {result.Outcome}.")
         };
     }
 

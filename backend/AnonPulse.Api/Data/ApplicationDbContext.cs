@@ -29,6 +29,8 @@ public class ApplicationDbContext
 
     public DbSet<Decision> Decisions => Set<Decision>();
 
+    public DbSet<AdminAuditEvent> AdminAuditEvents => Set<AdminAuditEvent>();
+
     public DbSet<DataProtectionKey> DataProtectionKeys => Set<DataProtectionKey>();
 
     protected override void OnModelCreating(ModelBuilder builder)
