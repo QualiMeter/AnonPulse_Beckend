@@ -13,7 +13,7 @@ public sealed class PollTextAnswerConfiguration : IEntityTypeConfiguration<PollT
         builder.HasKey(answer => answer.Id);
         builder.Property(answer => answer.Id).HasColumnName("id");
         builder.Property(answer => answer.QuestionId).HasColumnName("question_id");
-        builder.Property(answer => answer.Text).HasColumnName("text").HasMaxLength(2000).IsRequired();
+        builder.Property(answer => answer.Text).HasColumnName("text").HasMaxLength(4000).IsRequired();
         builder.HasIndex(answer => answer.QuestionId);
         builder.HasOne(answer => answer.Question).WithMany(question => question.TextAnswers)
             .HasForeignKey(answer => answer.QuestionId).OnDelete(DeleteBehavior.Restrict);

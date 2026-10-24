@@ -156,6 +156,40 @@ public sealed class PollEndpointsTests
         }, "Questions[0].Type");
     }
 
+    [Theory]
+    [InlineData(10, HttpStatusCode.Created)]
+    [InlineData(11, HttpStatusCode.BadRequest)]
+    public async Task Create_KnowledgeMaxScoreBoundary_IsEnforced(
+        int maxScore,
+        HttpStatusCode expectedStatus)
+    {
+        await using var factory = new AuthWebApplicationFactory();
+        SeededUser teacher = await factory.CreateTeacherAsync();
+        using HttpClient client = factory.CreateHttpsClient();
+        await LoginAsync(client, teacher);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/polls", new
+        {
+            questions = new[]
+            {
+                new
+                {
+                    text = "Knowledge", type = "text", textPurpose = "knowledge",
+                    knowledgeSettings = new
+                    {
+                        expectedAnswer = "Expected", gradingCriteria = "Criteria", maxScore
+                    }
+                }
+            }
+        });
+
+        Assert.Equal(expectedStatus, response.StatusCode);
+        using IServiceScope scope = factory.Services.CreateScope();
+        ApplicationDbContext db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.Equal(expectedStatus == HttpStatusCode.Created ? 1 : 0,
+            db.PollQuestionKnowledgeSettings.Count());
+    }
+
     [Fact]
     public async Task Create_WithoutQuestions_ReturnsValidationProblem()
     {

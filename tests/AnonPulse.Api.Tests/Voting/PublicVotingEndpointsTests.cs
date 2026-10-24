@@ -162,6 +162,61 @@ public sealed class PublicVotingEndpointsTests : IAsyncLifetime
         Assert.Empty(db.VoteParticipations);
     }
 
+    [Theory]
+    [InlineData(4000, HttpStatusCode.NoContent)]
+    [InlineData(4001, HttpStatusCode.BadRequest)]
+    public async Task TextAnswerLengthBoundary_IsEnforced(
+        int length,
+        HttpStatusCode expectedStatus)
+    {
+        SeededPoll poll = await SeedPollAsync(PollStatus.Open, [0],
+            types: [PollQuestionType.Text]);
+        using HttpClient client = _factory.CreateHttpsClient();
+        await client.GetAsync($"/api/public/polls/{poll.Id}");
+
+        HttpResponseMessage response = await VoteAsync(client, poll.Id,
+            [new(poll.QuestionIds[0], Text: new string('x', length))]);
+
+        Assert.Equal(expectedStatus, response.StatusCode);
+        using IServiceScope scope = _factory.Services.CreateScope();
+        ApplicationDbContext db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.Equal(expectedStatus == HttpStatusCode.NoContent ? 1 : 0,
+            await db.PollTextAnswers.CountAsync(answer =>
+                answer.Question.PollId == poll.Id));
+        Assert.Equal(expectedStatus == HttpStatusCode.NoContent ? 1 : 0,
+            await db.VoteParticipations.CountAsync(participation =>
+                participation.PollId == poll.Id));
+    }
+
+    [Fact]
+    public async Task ConfiguredRequestBodyLimit_IsAppliedBeforeModelBinding()
+    {
+        SeededPoll poll = await SeedPollAsync(PollStatus.Open, [0],
+            types: [PollQuestionType.Text]);
+        await using var limitedFactory = new PublicVotingWebApplicationFactory(
+            _postgres.GetConnectionString(),
+            new Dictionary<string, string?>
+            {
+                ["TextAnswers:MaximumRequestBodySize"] = "1024"
+            });
+        using HttpClient client = limitedFactory.CreateHttpsClient();
+        await client.GetAsync($"/api/public/polls/{poll.Id}");
+
+        string json = JsonSerializer.Serialize(new SubmitVotesRequest(
+        [
+            new VoteAnswerRequest(poll.QuestionIds[0], Text: new string('x', 2000))
+        ]));
+        using var request = new HttpRequestMessage(HttpMethod.Post,
+            $"/api/public/polls/{poll.Id}/votes");
+        request.Headers.Add("X-AnonPulse-Vote", "1");
+        request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+        HttpResponseMessage response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+        Assert.Equal("application/problem+json",
+            response.Content.Headers.ContentType?.MediaType);
+    }
+
     [Fact]
     public async Task MixedPoll_AllowsSeveralDistinctOptionsOnlyForMultipleChoiceQuestion()
     {

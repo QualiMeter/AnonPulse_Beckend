@@ -32,7 +32,7 @@ BEGIN
         CONSTRAINT "PK_poll_question_knowledge_settings" PRIMARY KEY (question_id),
         CONSTRAINT ck_poll_question_knowledge_settings_expected_answer CHECK (btrim(expected_answer) <> ''),
         CONSTRAINT ck_poll_question_knowledge_settings_grading_criteria CHECK (btrim(grading_criteria) <> ''),
-        CONSTRAINT ck_poll_question_knowledge_settings_max_score CHECK (max_score BETWEEN 1 AND 100),
+        CONSTRAINT ck_poll_question_knowledge_settings_max_score CHECK (max_score BETWEEN 1 AND 10),
         CONSTRAINT "FK_poll_question_knowledge_settings_poll_questions_question_id" FOREIGN KEY (question_id) REFERENCES poll_questions (id) ON DELETE RESTRICT
     );
     END IF;
@@ -44,7 +44,7 @@ BEGIN
     CREATE TABLE poll_text_answers (
         id uuid NOT NULL,
         question_id uuid NOT NULL,
-        text character varying(2000) NOT NULL,
+        text character varying(4000) NOT NULL,
         CONSTRAINT "PK_poll_text_answers" PRIMARY KEY (id),
         CONSTRAINT ck_poll_text_answers_text_not_blank CHECK (btrim(text) <> ''),
         CONSTRAINT "FK_poll_text_answers_poll_questions_question_id" FOREIGN KEY (question_id) REFERENCES poll_questions (id) ON DELETE RESTRICT

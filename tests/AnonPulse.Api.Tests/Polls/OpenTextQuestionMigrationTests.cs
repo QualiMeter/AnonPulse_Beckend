@@ -46,5 +46,18 @@ public sealed class OpenTextQuestionMigrationTests : IAsyncLifetime
         Assert.True(await verify.Votes.AnyAsync(v => v.Id == vote));
         Assert.Empty(verify.PollTextAnswers);
         Assert.Empty(verify.PollQuestionKnowledgeSettings);
+        int textMaximumLength = await verify.Database.SqlQueryRaw<int>("""
+            SELECT character_maximum_length::integer AS "Value"
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'poll_text_answers'
+              AND column_name = 'text'
+            """).SingleAsync();
+        string maxScoreConstraint = await verify.Database.SqlQueryRaw<string>("""
+            SELECT pg_get_constraintdef(oid) AS "Value"
+            FROM pg_constraint
+            WHERE conname = 'ck_poll_question_knowledge_settings_max_score'
+            """).SingleAsync();
+        Assert.Equal(4000, textMaximumLength);
+        Assert.Contains("10", maxScoreConstraint, StringComparison.Ordinal);
     }
 }

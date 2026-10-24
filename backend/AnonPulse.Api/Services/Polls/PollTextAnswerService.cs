@@ -42,13 +42,16 @@ public sealed class PollTextAnswerService(ApplicationDbContext dbContext)
         IQueryable<PollTextAnswer> query = dbContext.PollTextAnswers.AsNoTracking()
             .Where(answer => answer.QuestionId == questionId);
         int count = await query.CountAsync(cancellationToken);
-        var items = await query.OrderBy(answer => answer.Id)
-            .Skip((page - 1) * pageSize).Take(pageSize)
-            .Select(answer => new PollTextAnswerResponse(answer.Id, answer.Text))
-            .ToArrayAsync(cancellationToken);
+        long offset = ((long)page - 1L) * pageSize;
+        PollTextAnswerResponse[] items = offset >= count
+            ? []
+            : await query.OrderBy(answer => answer.Id)
+                .Skip((int)offset).Take(pageSize)
+                .Select(answer => new PollTextAnswerResponse(answer.Id, answer.Text))
+                .ToArrayAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return new(PollTextAnswersOutcome.Succeeded,
             new PagedResponse<PollTextAnswerResponse>(items, page, pageSize, count,
-                count == 0 ? 0 : (count + pageSize - 1) / pageSize));
+                count == 0 ? 0 : ((count - 1) / pageSize) + 1));
     }
 }

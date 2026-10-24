@@ -354,7 +354,7 @@ namespace AnonPulse.Api.Data.Migrations
 
                             t.HasCheckConstraint("ck_poll_question_knowledge_settings_grading_criteria", "btrim(grading_criteria) <> ''");
 
-                            t.HasCheckConstraint("ck_poll_question_knowledge_settings_max_score", "max_score BETWEEN 1 AND 100");
+                            t.HasCheckConstraint("ck_poll_question_knowledge_settings_max_score", "max_score BETWEEN 1 AND 10");
                         });
                 });
 
@@ -371,8 +371,8 @@ namespace AnonPulse.Api.Data.Migrations
 
                     b.Property<string>("Text")
                         .IsRequired()
-                        .HasMaxLength(2000)
-                        .HasColumnType("character varying(2000)")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
                         .HasColumnName("text");
 
                     b.HasKey("Id");

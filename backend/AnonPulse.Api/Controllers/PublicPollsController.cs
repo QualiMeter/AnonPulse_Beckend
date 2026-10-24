@@ -36,7 +36,7 @@ public sealed class PublicPollsController(
 
     [HttpPost("{id:guid}/votes")]
     [EnableRateLimiting("public-voting")]
-    [RequestSizeLimit(262_144)]
+    [TextAnswerRequestSizeLimit]
     public async Task<IActionResult> Submit(
         Guid id,
         SubmitVotesRequest request,
