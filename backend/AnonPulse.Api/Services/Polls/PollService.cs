@@ -569,9 +569,9 @@ public sealed class PollService(
         {
             errors[$"{key}.GradingCriteria"] = ["GradingCriteria must contain 1 to 4000 characters."];
         }
-        if (settings.MaxScore is null or < 1 or > 10)
+        if (settings.MaxScore is null or < 1 or > 100)
         {
-            errors[$"{key}.MaxScore"] = ["MaxScore must be between 1 and 10."];
+            errors[$"{key}.MaxScore"] = ["MaxScore must be between 1 and 100."];
         }
         return new ValidatedKnowledgeSettings(expected, criteria, settings.MaxScore ?? 0);
     }

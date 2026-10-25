@@ -44,7 +44,7 @@ namespace AnonPulse.Api.Data.Migrations
                     table.PrimaryKey("PK_poll_question_knowledge_settings", x => x.question_id);
                     table.CheckConstraint("ck_poll_question_knowledge_settings_expected_answer", "btrim(expected_answer) <> ''");
                     table.CheckConstraint("ck_poll_question_knowledge_settings_grading_criteria", "btrim(grading_criteria) <> ''");
-                    table.CheckConstraint("ck_poll_question_knowledge_settings_max_score", "max_score BETWEEN 1 AND 10");
+                    table.CheckConstraint("ck_poll_question_knowledge_settings_max_score", "max_score BETWEEN 1 AND 100");
                     table.ForeignKey(
                         name: "FK_poll_question_knowledge_settings_poll_questions_question_id",
                         column: x => x.question_id,

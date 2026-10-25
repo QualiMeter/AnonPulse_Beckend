@@ -58,6 +58,6 @@ public sealed class OpenTextQuestionMigrationTests : IAsyncLifetime
             WHERE conname = 'ck_poll_question_knowledge_settings_max_score'
             """).SingleAsync();
         Assert.Equal(4000, textMaximumLength);
-        Assert.Contains("10", maxScoreConstraint, StringComparison.Ordinal);
+        Assert.Contains("100", maxScoreConstraint, StringComparison.Ordinal);
     }
 }

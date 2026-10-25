@@ -11,7 +11,7 @@ public sealed class PollQuestionKnowledgeSettingsConfiguration
     {
         builder.ToTable("poll_question_knowledge_settings", table =>
         {
-            table.HasCheckConstraint("ck_poll_question_knowledge_settings_max_score", "max_score BETWEEN 1 AND 10");
+            table.HasCheckConstraint("ck_poll_question_knowledge_settings_max_score", "max_score BETWEEN 1 AND 100");
             table.HasCheckConstraint("ck_poll_question_knowledge_settings_expected_answer", "btrim(expected_answer) <> ''");
             table.HasCheckConstraint("ck_poll_question_knowledge_settings_grading_criteria", "btrim(grading_criteria) <> ''");
         });

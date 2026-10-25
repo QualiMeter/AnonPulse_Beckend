@@ -357,7 +357,7 @@ namespace AnonPulse.Api.Data.Migrations
 
                             t.HasCheckConstraint("ck_poll_question_knowledge_settings_grading_criteria", "btrim(grading_criteria) <> ''");
 
-                            t.HasCheckConstraint("ck_poll_question_knowledge_settings_max_score", "max_score BETWEEN 1 AND 10");
+                            t.HasCheckConstraint("ck_poll_question_knowledge_settings_max_score", "max_score BETWEEN 1 AND 100");
                         });
                 });
 

@@ -15,7 +15,7 @@ Creation and full draft replacement keep the existing routes. `type` is `single_
 }
 ```
 
-Choice questions require at least two unique non-empty options. Text questions require no options and cannot set `allowsMultipleAnswers: true`. Text answers may contain at most 4000 characters. `maxScore` must be an integer from 1 through 10. Knowledge settings are private and must never be copied from the teacher response into a student view.
+Choice questions require at least two unique non-empty options. Text questions require no options and cannot set `allowsMultipleAnswers: true`. Text answers may contain at most 4000 characters. `maxScore` must be an integer from 1 through 100. Knowledge settings are private and must never be copied from the teacher response into a student view.
 
 Public poll questions return `type`, compatible `allowsMultipleAnswers`, `textPurpose`, and options (empty for text). They never return knowledge settings.
 

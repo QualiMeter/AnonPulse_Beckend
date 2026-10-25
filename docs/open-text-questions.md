@@ -2,7 +2,7 @@
 
 AnonPulse supports `single_choice`, `multiple_choice`, and `text` questions. The persisted `question_type` is the source of truth. The legacy `allowsMultipleAnswers` field remains accepted and returned; a database check keeps it consistent with the explicit type.
 
-For `text`, `textPurpose` is required: `feedback` or `knowledge`. A knowledge question additionally requires `knowledgeSettings` with non-empty `expectedAnswer` and `gradingCriteria` (up to 4000 characters each) and `maxScore` from 1 through 10. These settings are returned only by authenticated teacher/admin poll APIs and are never included in `GET /api/public/polls/{id}` or results.
+For `text`, `textPurpose` is required: `feedback` or `knowledge`. A knowledge question additionally requires `knowledgeSettings` with non-empty `expectedAnswer` and `gradingCriteria` (up to 4000 characters each) and `maxScore` from 1 through 100. These settings are returned only by authenticated teacher/admin poll APIs and are never included in `GET /api/public/polls/{id}` or results.
 
 Text answers are stored in `poll_text_answers(id, question_id, text)`. There is intentionally no user, participation, token, session, IP, grouping identifier, or timestamp. This prevents database-level reconstruction of one participant's mixed answer set, but arbitrary text may itself contain identifying information, so absolute anonymity is not promised.
 

@@ -157,8 +157,10 @@ public sealed class PollEndpointsTests
     }
 
     [Theory]
-    [InlineData(10, HttpStatusCode.Created)]
-    [InlineData(11, HttpStatusCode.BadRequest)]
+    [InlineData(1, HttpStatusCode.Created)]
+    [InlineData(100, HttpStatusCode.Created)]
+    [InlineData(0, HttpStatusCode.BadRequest)]
+    [InlineData(101, HttpStatusCode.BadRequest)]
     public async Task Create_KnowledgeMaxScoreBoundary_IsEnforced(
         int maxScore,
         HttpStatusCode expectedStatus)
