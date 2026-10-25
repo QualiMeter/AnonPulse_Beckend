@@ -25,6 +25,8 @@ public class ApplicationDbContext
 
     public DbSet<PollTextAnswer> PollTextAnswers => Set<PollTextAnswer>();
 
+    public DbSet<PollFeedbackAnalysis> PollFeedbackAnalyses => Set<PollFeedbackAnalysis>();
+
     public DbSet<PollQuestionKnowledgeSettings> PollQuestionKnowledgeSettings =>
         Set<PollQuestionKnowledgeSettings>();
 

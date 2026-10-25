@@ -29,4 +29,6 @@ public sealed class Poll
     public ICollection<IdentifiedPollSubmission> IdentifiedSubmissions { get; } = [];
 
     public Decision? Decision { get; set; }
+
+    public ICollection<PollFeedbackAnalysis> FeedbackAnalyses { get; } = [];
 }

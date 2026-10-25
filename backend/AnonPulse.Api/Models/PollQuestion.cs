@@ -46,4 +46,6 @@ public sealed class PollQuestion
     public ICollection<PollTextAnswer> TextAnswers { get; } = [];
 
     public PollQuestionKnowledgeSettings? KnowledgeSettings { get; set; }
+
+    public ICollection<PollFeedbackAnalysis> FeedbackAnalyses { get; } = [];
 }
