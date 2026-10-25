@@ -10,6 +10,8 @@ public sealed class Poll
 
     public PollStatus Status { get; set; } = PollStatus.Draft;
 
+    public PollResponseMode ResponseMode { get; set; } = PollResponseMode.Anonymous;
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime? PublishedAt { get; set; }
@@ -23,6 +25,8 @@ public sealed class Poll
     public ICollection<PollQuestion> Questions { get; } = [];
 
     public ICollection<VoteParticipation> VoteParticipations { get; } = [];
+
+    public ICollection<IdentifiedPollSubmission> IdentifiedSubmissions { get; } = [];
 
     public Decision? Decision { get; set; }
 }

@@ -13,7 +13,8 @@ public sealed record AdminPollListItemResponse(
     DateTime? ClosedAt,
     int QuestionCount,
     int ParticipationCount,
-    bool HasPublishedDecision);
+    bool HasPublishedDecision,
+    string ResponseMode = "anonymous");
 
 public sealed record AdminPollDetailsResponse(
     Guid Id,
@@ -27,4 +28,5 @@ public sealed record AdminPollDetailsResponse(
     IReadOnlyList<PollQuestionResponse> Questions,
     int ParticipationCount,
     int VoteCount,
-    bool HasPublishedDecision);
+    bool HasPublishedDecision,
+    string ResponseMode = "anonymous");

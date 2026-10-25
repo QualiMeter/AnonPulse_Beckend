@@ -8,5 +8,9 @@ public sealed class Vote
 
     public DateTime? CreatedAt { get; set; }
 
+    public Guid? IdentifiedSubmissionId { get; set; }
+
     public PollOption Option { get; set; } = null!;
+
+    public IdentifiedPollSubmission? IdentifiedSubmission { get; set; }
 }

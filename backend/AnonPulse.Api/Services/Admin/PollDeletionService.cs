@@ -85,6 +85,9 @@ public sealed class PollDeletionService(
             cancellationToken);
         int textAnswerCount = await dbContext.PollTextAnswers.CountAsync(
             answer => answer.Question.PollId == pollId, cancellationToken);
+        int identifiedSubmissionCount = await dbContext.IdentifiedPollSubmissions.CountAsync(
+            submission => submission.PollId == pollId,
+            cancellationToken);
 
         await dbContext.Decisions
             .Where(decision => decision.PollId == pollId)
@@ -97,6 +100,9 @@ public sealed class PollDeletionService(
             .ExecuteDeleteAsync(cancellationToken);
         await dbContext.PollTextAnswers
             .Where(answer => answer.Question.PollId == pollId)
+            .ExecuteDeleteAsync(cancellationToken);
+        await dbContext.IdentifiedPollSubmissions
+            .Where(submission => submission.PollId == pollId)
             .ExecuteDeleteAsync(cancellationToken);
         await dbContext.PollQuestionKnowledgeSettings
             .Where(settings => settings.Question.PollId == pollId)
@@ -130,6 +136,7 @@ public sealed class PollDeletionService(
                     ["options"] = optionCount.ToString(),
                     ["votes"] = voteCount.ToString(),
                     ["textAnswers"] = textAnswerCount.ToString(),
+                    ["identifiedSubmissions"] = identifiedSubmissionCount.ToString(),
                     ["participations"] = participationCount.ToString(),
                     ["decisions"] = decisionCount.ToString()
                 })
