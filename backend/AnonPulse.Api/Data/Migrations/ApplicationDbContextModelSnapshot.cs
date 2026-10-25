@@ -264,6 +264,113 @@ namespace AnonPulse.Api.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("AnonPulse.Api.Models.PollFeedbackAnalysis", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AlgorithmVersion")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("algorithm_version");
+
+                    b.Property<int>("AnswerCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("answer_count");
+
+                    b.Property<string>("AnswerFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("answer_fingerprint");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempts");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<int?>("CompletionTokens")
+                        .HasColumnType("integer")
+                        .HasColumnName("completion_tokens");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("ErrorCode")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("error_code");
+
+                    b.Property<string>("Model")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("model");
+
+                    b.Property<DateTime?>("NextAttemptAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("next_attempt_at");
+
+                    b.Property<Guid>("PollId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("poll_id");
+
+                    b.Property<int?>("PromptTokens")
+                        .HasColumnType("integer")
+                        .HasColumnName("prompt_tokens");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("provider");
+
+                    b.Property<Guid>("QuestionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("question_id");
+
+                    b.Property<string>("ReportJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("report");
+
+                    b.Property<DateTime?>("StartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("status");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PollId");
+
+                    b.HasIndex("QuestionId", "AnswerFingerprint")
+                        .IsUnique()
+                        .HasDatabaseName("ux_feedback_analyses_question_fingerprint");
+
+                    b.HasIndex("Status", "NextAttemptAt", "CreatedAt")
+                        .HasDatabaseName("ix_feedback_analyses_queue");
+
+                    b.ToTable("poll_feedback_analyses", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_poll_feedback_analyses_answer_count", "answer_count > 0");
+
+                            t.HasCheckConstraint("ck_poll_feedback_analyses_attempts", "attempts >= 0");
+
+                            t.HasCheckConstraint("ck_poll_feedback_analyses_status", "status IN ('pending', 'processing', 'completed', 'failed')");
+                        });
+                });
+
             modelBuilder.Entity("AnonPulse.Api.Models.PollOption", b =>
                 {
                     b.Property<Guid>("Id")
@@ -681,6 +788,25 @@ namespace AnonPulse.Api.Data.Migrations
                     b.Navigation("Creator");
                 });
 
+            modelBuilder.Entity("AnonPulse.Api.Models.PollFeedbackAnalysis", b =>
+                {
+                    b.HasOne("AnonPulse.Api.Models.Poll", "Poll")
+                        .WithMany("FeedbackAnalyses")
+                        .HasForeignKey("PollId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("AnonPulse.Api.Models.PollQuestion", "Question")
+                        .WithMany("FeedbackAnalyses")
+                        .HasForeignKey("QuestionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Poll");
+
+                    b.Navigation("Question");
+                });
+
             modelBuilder.Entity("AnonPulse.Api.Models.PollOption", b =>
                 {
                     b.HasOne("AnonPulse.Api.Models.PollQuestion", "Question")
@@ -832,6 +958,8 @@ namespace AnonPulse.Api.Data.Migrations
                 {
                     b.Navigation("Decision");
 
+                    b.Navigation("FeedbackAnalyses");
+
                     b.Navigation("IdentifiedSubmissions");
 
                     b.Navigation("Questions");
@@ -846,6 +974,8 @@ namespace AnonPulse.Api.Data.Migrations
 
             modelBuilder.Entity("AnonPulse.Api.Models.PollQuestion", b =>
                 {
+                    b.Navigation("FeedbackAnalyses");
+
                     b.Navigation("KnowledgeSettings");
 
                     b.Navigation("Options");

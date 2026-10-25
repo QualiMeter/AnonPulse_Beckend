@@ -9,6 +9,7 @@ using AnonPulse.Api.Services.Authentication;
 using AnonPulse.Api.Services.Polls;
 using AnonPulse.Api.Services.PollResults;
 using AnonPulse.Api.Services.Voting;
+using AnonPulse.Api.Services.FeedbackAnalysis;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -106,6 +107,38 @@ builder.Services.AddScoped<IPollResultsService, PollResultsService>();
 builder.Services.AddScoped<IPublicVotingService, PublicVotingService>();
 builder.Services.AddScoped<IPollTextAnswerService, PollTextAnswerService>();
 builder.Services.AddScoped<IPollSubmissionService, PollSubmissionService>();
+builder.Services.AddScoped<IFeedbackAnalysisService, FeedbackAnalysisService>();
+builder.Services.AddScoped<IFeedbackAnalysisJobProcessor, FeedbackAnalysisJobProcessor>();
+builder.Services.AddScoped<IFeedbackAnalysisJobQueue, FeedbackAnalysisJobQueue>();
+builder.Services.AddScoped<IFeedbackAnalysisProvider, GroqFeedbackAnalysisProvider>();
+builder.Services.AddSingleton<IPersonalDataSanitizer, PersonalDataSanitizer>();
+builder.Services.AddHostedService<FeedbackAnalysisWorker>();
+builder.Services.AddOptions<AiOptions>()
+    .Bind(builder.Configuration.GetSection(AiOptions.SectionName))
+    .Validate(options => options.TimeoutSeconds is >= 1 and <= 600,
+        "AI timeout must be between 1 and 600 seconds.")
+    .Validate(options => options.MaxRetries is >= 0 and <= 5,
+        "AI maximum retries must be between 0 and 5.")
+    .Validate(options => options.MaxConcurrentJobs is >= 1 and <= 10,
+        "AI concurrent job limit must be between 1 and 10.")
+    .Validate(options => options.MaxAnswers > 0 && options.MaxTotalCharacters > 0 &&
+                         options.MaxInputTokens > 0 && options.MaxOutputTokens > 0,
+        "AI analysis limits must be positive.")
+    .Validate(options => options.ReasoningEffort is "low" or "medium" or "high",
+        "GPT-OSS reasoning effort must be low, medium, or high.")
+    .Validate(options => options.RetryCooldownSeconds is >= 1 and <= 86_400,
+        "AI retry cooldown must be between 1 second and 24 hours.")
+    .Validate(options => options.WorkerPollSeconds is >= 1 and <= 60,
+        "AI worker poll interval must be between 1 and 60 seconds.")
+    .Validate(options => Uri.TryCreate(options.Groq.BaseUrl, UriKind.Absolute, out _),
+        "Groq base URL must be an absolute URL.")
+    .ValidateOnStart();
+builder.Services.AddHttpClient("groq-feedback-analysis", (serviceProvider, client) =>
+{
+    AiOptions options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<AiOptions>>().Value;
+    client.BaseAddress = new Uri(options.Groq.BaseUrl.TrimEnd('/') + "/");
+    client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds);
+});
 builder.Services.AddOptions<TextAnswerOptions>()
     .Bind(builder.Configuration.GetSection(TextAnswerOptions.SectionName))
     .Validate(options => options.MaximumLength is > 0 and <= TextAnswerOptions.StorageMaximumLength,
