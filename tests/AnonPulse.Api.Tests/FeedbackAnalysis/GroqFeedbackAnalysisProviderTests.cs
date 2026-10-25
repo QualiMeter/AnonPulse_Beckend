@@ -58,7 +58,8 @@ public sealed class GroqFeedbackAnalysisProviderTests
         Assert.Contains("\"strict\":true", body);
         Assert.Contains("\"model\":\"openai/gpt-oss-20b\"", body);
         Assert.Contains("\"reasoning_effort\":\"low\"", body);
-        Assert.Contains("\"reasoning_format\":\"hidden\"", body);
+        Assert.Contains("\"include_reasoning\":false", body);
+        Assert.DoesNotContain("reasoning_format", body);
         Assert.Equal(12, result.PromptTokens);
     }
 

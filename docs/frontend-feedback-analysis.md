@@ -187,8 +187,9 @@ UTF-8-размеру полного OpenAI-compatible payload, включая т
 `provider_token_limit_exceeded` без автоматических повторов.
 
 Для `openai/gpt-oss-20b` используется `reasoning_effort: "low"`,
-`reasoning_format: "hidden"` и `max_completion_tokens: 2000`. Модель допускает
-`low`, `medium` и `high`; низкий режим достаточен для структурированного резюме и
+`include_reasoning: false` и `max_completion_tokens: 2000`. GPT-OSS не поддерживает
+`reasoning_format`; одновременно передавать его с `include_reasoning` также нельзя.
+Модель допускает `low`, `medium` и `high`; низкий режим достаточен для структурированного резюме и
 лучше соответствует бесплатным квотам. Актуальные параметры:
 [GPT OSS 20B](https://console.groq.com/docs/model/openai/gpt-oss-20b),
 [Reasoning](https://console.groq.com/docs/reasoning),

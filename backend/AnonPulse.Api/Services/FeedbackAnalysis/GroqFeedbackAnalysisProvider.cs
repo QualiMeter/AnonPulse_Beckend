@@ -123,7 +123,7 @@ public sealed class GroqFeedbackAnalysisProvider(
         temperature = 0.1,
         max_completion_tokens = input.MaxOutputTokens,
         reasoning_effort = reasoningEffort,
-        reasoning_format = "hidden",
+        include_reasoning = false,
         messages = new object[]
         {
             new
