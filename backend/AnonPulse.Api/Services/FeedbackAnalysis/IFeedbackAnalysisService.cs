@@ -16,7 +16,8 @@ public sealed record FeedbackAnalysisServiceResult(
     FeedbackAnalysisOutcome Outcome,
     FeedbackAnalysisResponse? Analysis = null,
     string? ErrorCode = null,
-    string? Error = null);
+    string? Error = null,
+    int? RetryAfterSeconds = null);
 
 public enum FeedbackAnalysisOutcome
 {
@@ -26,5 +27,6 @@ public enum FeedbackAnalysisOutcome
     Conflict,
     Invalid,
     Disabled,
-    TooLarge
+    TooLarge,
+    RateLimited
 }

@@ -49,8 +49,11 @@ public sealed class FeedbackAnalysisController(IFeedbackAnalysisService service)
             FeedbackAnalysisOutcome.Conflict => StatusCodes.Status409Conflict,
             FeedbackAnalysisOutcome.Disabled => StatusCodes.Status503ServiceUnavailable,
             FeedbackAnalysisOutcome.TooLarge => StatusCodes.Status413PayloadTooLarge,
+            FeedbackAnalysisOutcome.RateLimited => StatusCodes.Status429TooManyRequests,
             _ => StatusCodes.Status400BadRequest
         };
+        if (result.RetryAfterSeconds is int retryAfterSeconds)
+            Response.Headers.RetryAfter = retryAfterSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
         return StatusCode(status, new ProblemDetails
         {
             Status = status,

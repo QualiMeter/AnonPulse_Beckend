@@ -36,13 +36,6 @@ public sealed class FeedbackAnalysisService(
             return new(FeedbackAnalysisOutcome.Invalid, ErrorCode: "external_processing_consent_required",
                 Error: "Explicit confirmation of external processing is required.");
         }
-        if (!_options.Enabled || !string.Equals(_options.Provider, "Groq", StringComparison.OrdinalIgnoreCase) ||
-            string.IsNullOrWhiteSpace(_options.Groq.ApiKey))
-        {
-            return new(FeedbackAnalysisOutcome.Disabled, ErrorCode: "ai_not_configured",
-                Error: "Feedback analysis is disabled or not configured.");
-        }
-
         List<PollTextAnswer> answers = question!.TextAnswers
             .Where(item => !string.IsNullOrWhiteSpace(item.Text))
             .OrderBy(item => item.Id).ToList();
@@ -51,10 +44,26 @@ public sealed class FeedbackAnalysisService(
             return new(FeedbackAnalysisOutcome.Invalid, ErrorCode: "no_feedback_answers",
                 Error: "At least one non-empty feedback answer is required.");
         }
+
+        string fingerprint = CreateFingerprint(answers);
+        PollFeedbackAnalysis? existing = await dbContext.PollFeedbackAnalyses
+            .SingleOrDefaultAsync(item => item.QuestionId == questionId &&
+                                          item.AnswerFingerprint == fingerprint,
+                cancellationToken);
+        if (existing is not null && existing.Status != FeedbackAnalysisStatus.Failed)
+            return new(FeedbackAnalysisOutcome.Succeeded, ToResponse(existing));
+
+        if (!_options.Enabled || !string.Equals(_options.Provider, "Groq", StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(_options.Groq.ApiKey))
+        {
+            return new(FeedbackAnalysisOutcome.Disabled, ErrorCode: "ai_not_configured",
+                Error: "Feedback analysis is disabled or not configured.");
+        }
+
         int totalCharacters = answers.Sum(item => item.Text.Length);
-        const int promptAndSchemaTokenAllowance = 1_000;
-        int estimatedTokens = (int)Math.Ceiling(totalCharacters / 4d) +
-                              promptAndSchemaTokenAllowance;
+        int estimatedTokens = GroqFeedbackAnalysisProvider.EstimateInputTokens(
+            _options.Model, answers.Select(item => item.Text).ToList(),
+            _options.MaxOutputTokens, _options.ReasoningEffort);
         if (answers.Count > _options.MaxAnswers || totalCharacters > _options.MaxTotalCharacters ||
             estimatedTokens > _options.MaxInputTokens)
         {
@@ -62,15 +71,8 @@ public sealed class FeedbackAnalysisService(
                 Error: "The feedback set exceeds the configured free-tier analysis limits.");
         }
 
-        string fingerprint = CreateFingerprint(answers);
-        PollFeedbackAnalysis? existing = await dbContext.PollFeedbackAnalyses
-            .SingleOrDefaultAsync(item => item.QuestionId == questionId &&
-                                          item.AnswerFingerprint == fingerprint,
-                cancellationToken);
         if (existing is not null)
-        {
-            return new(FeedbackAnalysisOutcome.Succeeded, ToResponse(existing));
-        }
+            return await RestartFailedAsync(existing, cancellationToken);
 
         var analysis = new PollFeedbackAnalysis
         {
@@ -100,6 +102,63 @@ public sealed class FeedbackAnalysisService(
         }
         return new(FeedbackAnalysisOutcome.Succeeded, ToResponse(analysis));
     }
+
+    private async Task<FeedbackAnalysisServiceResult> RestartFailedAsync(
+        PollFeedbackAnalysis analysis, CancellationToken cancellationToken)
+    {
+        DateTime now = timeProvider.GetUtcNow().UtcDateTime;
+        if (analysis.NextAttemptAt is DateTime retryAt && retryAt > now)
+            return Cooldown(retryAt - now);
+
+        if (!dbContext.Database.IsRelational())
+        {
+            ResetForRetry(analysis, now);
+            await dbContext.SaveChangesAsync(cancellationToken);
+            return new(FeedbackAnalysisOutcome.Succeeded, ToResponse(analysis));
+        }
+
+        int updated = await dbContext.PollFeedbackAnalyses
+            .Where(item => item.Id == analysis.Id &&
+                           item.Status == FeedbackAnalysisStatus.Failed &&
+                           (item.NextAttemptAt == null || item.NextAttemptAt <= now))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(item => item.Status, FeedbackAnalysisStatus.Pending)
+                .SetProperty(item => item.StartedAt, (DateTime?)null)
+                .SetProperty(item => item.CompletedAt, (DateTime?)null)
+                .SetProperty(item => item.NextAttemptAt, now)
+                .SetProperty(item => item.Attempts, 0)
+                .SetProperty(item => item.ErrorCode, (string?)null)
+                .SetProperty(item => item.ReportJson, (string?)null)
+                .SetProperty(item => item.PromptTokens, (int?)null)
+                .SetProperty(item => item.CompletionTokens, (int?)null),
+                cancellationToken);
+
+        await dbContext.Entry(analysis).ReloadAsync(cancellationToken);
+        if (updated == 0 && analysis.Status == FeedbackAnalysisStatus.Failed &&
+            analysis.NextAttemptAt is DateTime concurrentRetryAt && concurrentRetryAt > now)
+            return Cooldown(concurrentRetryAt - now);
+
+        return new(FeedbackAnalysisOutcome.Succeeded, ToResponse(analysis));
+    }
+
+    private static void ResetForRetry(PollFeedbackAnalysis analysis, DateTime now)
+    {
+        analysis.Status = FeedbackAnalysisStatus.Pending;
+        analysis.StartedAt = null;
+        analysis.CompletedAt = null;
+        analysis.NextAttemptAt = now;
+        analysis.Attempts = 0;
+        analysis.ErrorCode = null;
+        analysis.ReportJson = null;
+        analysis.PromptTokens = null;
+        analysis.CompletionTokens = null;
+    }
+
+    private static FeedbackAnalysisServiceResult Cooldown(TimeSpan remaining) => new(
+        FeedbackAnalysisOutcome.RateLimited,
+        ErrorCode: "analysis_retry_cooldown",
+        Error: "Feedback analysis cannot be restarted until the provider retry cooldown expires.",
+        RetryAfterSeconds: Math.Max(1, (int)Math.Ceiling(remaining.TotalSeconds)));
 
     public async Task<FeedbackAnalysisServiceResult> GetAsync(
         Guid actorId, bool isAdmin, Guid pollId, Guid questionId,

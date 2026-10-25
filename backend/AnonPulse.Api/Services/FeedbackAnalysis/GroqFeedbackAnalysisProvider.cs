@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.Extensions.Options;
 
@@ -26,7 +27,7 @@ public sealed class GroqFeedbackAnalysisProvider(
         using var request = new HttpRequestMessage(HttpMethod.Post, "chat/completions");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", settings.Groq.ApiKey);
         request.Content = new StringContent(
-            JsonSerializer.Serialize(CreateRequest(input), JsonOptions),
+            JsonSerializer.Serialize(CreateRequest(input, settings.ReasoningEffort), JsonOptions),
             Encoding.UTF8,
             "application/json");
 
@@ -60,6 +61,8 @@ public sealed class GroqFeedbackAnalysisProvider(
 
             if (!response.IsSuccessStatusCode)
             {
+                if (response.StatusCode == HttpStatusCode.RequestEntityTooLarge)
+                    throw new FeedbackProviderException("provider_token_limit_exceeded", false);
                 bool retryable = (int)response.StatusCode >= 500;
                 throw new FeedbackProviderException(
                     retryable ? "provider_unavailable" : "provider_rejected_request",
@@ -97,11 +100,30 @@ public sealed class GroqFeedbackAnalysisProvider(
             ? parsed : null;
     }
 
-    private static object CreateRequest(FeedbackAnalysisInput input) => new
+    internal static int EstimateInputTokens(string model, IReadOnlyList<string> answerTexts,
+        int maxOutputTokens, string reasoningEffort)
+    {
+        var answers = answerTexts.Select((text, index) => new FeedbackInputAnswer(
+            $"answer-{index + 1:D6}-{new string('0', 32)}", text)).ToList();
+        var estimationOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        };
+        string payload = JsonSerializer.Serialize(CreateRequest(
+            new FeedbackAnalysisInput(model, answers, maxOutputTokens), reasoningEffort),
+            estimationOptions);
+        // Two UTF-8 bytes per token is deliberately conservative for Cyrillic and also
+        // includes the instructions, temporary IDs, JSON envelope and strict schema.
+        return (int)Math.Ceiling(Encoding.UTF8.GetByteCount(payload) / 2d);
+    }
+
+    private static object CreateRequest(FeedbackAnalysisInput input, string reasoningEffort) => new
     {
         model = input.Model,
         temperature = 0.1,
         max_completion_tokens = input.MaxOutputTokens,
+        reasoning_effort = reasoningEffort,
+        reasoning_format = "hidden",
         messages = new object[]
         {
             new

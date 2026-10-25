@@ -13,6 +13,8 @@ public sealed class AiOptions
     public int MaxTotalCharacters { get; set; } = 20_000;
     public int MaxInputTokens { get; set; } = 6_000;
     public int MaxOutputTokens { get; set; } = 2_000;
+    public string ReasoningEffort { get; set; } = "low";
+    public int RetryCooldownSeconds { get; set; } = 60;
     public int WorkerPollSeconds { get; set; } = 5;
     public GroqOptions Groq { get; set; } = new();
 }

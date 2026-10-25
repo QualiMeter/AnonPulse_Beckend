@@ -100,6 +100,7 @@ public sealed class FeedbackAnalysisJobProcessorTests
         await db.SaveChangesAsync();
         await CreateProcessor(db, fake).ProcessAsync(analysis.Id, default);
         Assert.Equal(FeedbackAnalysisStatus.Failed, analysis.Status);
+        Assert.True(analysis.NextAttemptAt >= before.AddMinutes(2));
         Assert.Equal(2, fake.Calls);
     }
 

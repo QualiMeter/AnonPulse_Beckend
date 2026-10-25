@@ -124,6 +124,10 @@ builder.Services.AddOptions<AiOptions>()
     .Validate(options => options.MaxAnswers > 0 && options.MaxTotalCharacters > 0 &&
                          options.MaxInputTokens > 0 && options.MaxOutputTokens > 0,
         "AI analysis limits must be positive.")
+    .Validate(options => options.ReasoningEffort is "low" or "medium" or "high",
+        "GPT-OSS reasoning effort must be low, medium, or high.")
+    .Validate(options => options.RetryCooldownSeconds is >= 1 and <= 86_400,
+        "AI retry cooldown must be between 1 second and 24 hours.")
     .Validate(options => options.WorkerPollSeconds is >= 1 and <= 60,
         "AI worker poll interval must be between 1 and 60 seconds.")
     .Validate(options => Uri.TryCreate(options.Groq.BaseUrl, UriKind.Absolute, out _),

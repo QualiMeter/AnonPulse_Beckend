@@ -38,7 +38,9 @@ public sealed class FeedbackAnalysisJobProcessor(
                 FeedbackAnalysisService.CreateFingerprint(answers) != analysis.AnswerFingerprint)
                 throw new FeedbackProviderException("answer_set_changed", false);
             int totalCharacters = answers.Sum(item => item.Text.Length);
-            int estimatedTokens = (int)Math.Ceiling(totalCharacters / 4d) + 1_000;
+            int estimatedTokens = GroqFeedbackAnalysisProvider.EstimateInputTokens(
+                analysis.Model, answers.Select(item => sanitizer.Sanitize(item.Text)).ToList(),
+                _options.MaxOutputTokens, _options.ReasoningEffort);
             if (answers.Count > _options.MaxAnswers ||
                 totalCharacters > _options.MaxTotalCharacters ||
                 estimatedTokens > _options.MaxInputTokens)
@@ -98,19 +100,33 @@ public sealed class FeedbackAnalysisJobProcessor(
         bool retryable, TimeSpan? retryAfter, CancellationToken cancellationToken)
     {
         int maximumAttempts = _options.MaxRetries + 1;
+        DateTime now = timeProvider.GetUtcNow().UtcDateTime;
+        TimeSpan minimumRateLimitCooldown = TimeSpan.FromSeconds(
+            Math.Max(1, _options.RetryCooldownSeconds));
         if (retryable && analysis.Attempts < maximumAttempts)
         {
             TimeSpan delay = retryAfter ?? TimeSpan.FromSeconds(
                 Math.Min(Math.Pow(2, analysis.Attempts) * 5, 3600));
+            if (code == "free_quota_exhausted" && delay < minimumRateLimitCooldown)
+                delay = minimumRateLimitCooldown;
             if (delay < TimeSpan.Zero) delay = TimeSpan.Zero;
             analysis.Status = FeedbackAnalysisStatus.Pending;
-            analysis.NextAttemptAt = timeProvider.GetUtcNow().UtcDateTime + delay;
+            analysis.NextAttemptAt = now + delay;
         }
         else
         {
             analysis.Status = FeedbackAnalysisStatus.Failed;
-            analysis.CompletedAt = timeProvider.GetUtcNow().UtcDateTime;
-            analysis.NextAttemptAt = null;
+            analysis.CompletedAt = now;
+            if (code == "free_quota_exhausted")
+            {
+                TimeSpan cooldown = retryAfter ?? minimumRateLimitCooldown;
+                if (cooldown < minimumRateLimitCooldown) cooldown = minimumRateLimitCooldown;
+                analysis.NextAttemptAt = now + cooldown;
+            }
+            else
+            {
+                analysis.NextAttemptAt = null;
+            }
         }
         analysis.ErrorCode = code;
         await dbContext.SaveChangesAsync(cancellationToken);

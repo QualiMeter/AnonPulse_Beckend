@@ -57,7 +57,22 @@ public sealed class GroqFeedbackAnalysisProviderTests
         Assert.Contains("\"type\":\"json_schema\"", body);
         Assert.Contains("\"strict\":true", body);
         Assert.Contains("\"model\":\"openai/gpt-oss-20b\"", body);
+        Assert.Contains("\"reasoning_effort\":\"low\"", body);
+        Assert.Contains("\"reasoning_format\":\"hidden\"", body);
         Assert.Equal(12, result.PromptTokens);
+    }
+
+    [Fact]
+    public async Task ProviderPayloadTooLarge_IsNotRetried()
+    {
+        var provider = CreateProvider(new StubHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.RequestEntityTooLarge)));
+
+        FeedbackProviderException error = await Assert.ThrowsAsync<FeedbackProviderException>(() =>
+            provider.AnalyzeAsync(Input(), default));
+
+        Assert.Equal("provider_token_limit_exceeded", error.ErrorCode);
+        Assert.False(error.Retryable);
     }
 
     private static FeedbackAnalysisInput Input() => new("openai/gpt-oss-20b",
