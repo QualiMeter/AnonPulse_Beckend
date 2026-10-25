@@ -16,8 +16,7 @@ namespace AnonPulse.Api.Data.Migrations
                 table: "poll_questions",
                 type: "character varying(32)",
                 maxLength: 32,
-                nullable: false,
-                defaultValue: "single_choice");
+                nullable: true);
 
             migrationBuilder.AddColumn<string>(
                 name: "text_purpose",
@@ -26,9 +25,74 @@ namespace AnonPulse.Api.Data.Migrations
                 maxLength: 16,
                 nullable: true);
 
-            migrationBuilder.Sql(
-                "UPDATE poll_questions SET question_type = 'multiple_choice' " +
-                "WHERE allows_multiple_answers = TRUE;");
+            migrationBuilder.Sql("""
+                UPDATE poll_questions
+                SET question_type = CASE
+                    WHEN allows_multiple_answers THEN 'multiple_choice'
+                    ELSE 'single_choice'
+                END;
+                """);
+
+            migrationBuilder.AlterColumn<string>(
+                name: "question_type",
+                table: "poll_questions",
+                type: "character varying(32)",
+                maxLength: 32,
+                nullable: false,
+                oldClrType: typeof(string),
+                oldType: "character varying(32)",
+                oldMaxLength: 32,
+                oldNullable: true);
+
+            migrationBuilder.Sql("""
+                CREATE FUNCTION set_poll_question_type_for_legacy_writes()
+                RETURNS trigger
+                LANGUAGE plpgsql
+                AS $function$
+                BEGIN
+                    IF TG_NAME = 'trg_poll_questions_10_validate_explicit_type_update' THEN
+                        IF ((NEW.question_type = 'multiple_choice') IS DISTINCT FROM NEW.allows_multiple_answers) THEN
+                            RAISE EXCEPTION 'question_type and allows_multiple_answers are inconsistent'
+                                USING ERRCODE = '23514',
+                                      CONSTRAINT = 'ck_poll_questions_type_legacy_consistent';
+                        END IF;
+
+                        RETURN NEW;
+                    END IF;
+
+                    IF TG_OP = 'INSERT' AND NEW.question_type IS NULL THEN
+                        NEW.question_type := CASE
+                            WHEN NEW.allows_multiple_answers THEN 'multiple_choice'
+                            ELSE 'single_choice'
+                        END;
+                    ELSIF TG_OP = 'UPDATE'
+                        AND NEW.allows_multiple_answers IS DISTINCT FROM OLD.allows_multiple_answers
+                        AND NEW.question_type IS NOT DISTINCT FROM OLD.question_type THEN
+                        NEW.question_type := CASE
+                            WHEN NEW.allows_multiple_answers THEN 'multiple_choice'
+                            ELSE 'single_choice'
+                        END;
+                    END IF;
+
+                    RETURN NEW;
+                END;
+                $function$;
+
+                CREATE TRIGGER trg_poll_questions_10_validate_explicit_type_update
+                BEFORE UPDATE OF question_type ON poll_questions
+                FOR EACH ROW
+                EXECUTE FUNCTION set_poll_question_type_for_legacy_writes();
+
+                CREATE TRIGGER trg_poll_questions_20_legacy_insert_type
+                BEFORE INSERT ON poll_questions
+                FOR EACH ROW
+                EXECUTE FUNCTION set_poll_question_type_for_legacy_writes();
+
+                CREATE TRIGGER trg_poll_questions_20_legacy_update_type
+                BEFORE UPDATE OF allows_multiple_answers ON poll_questions
+                FOR EACH ROW
+                EXECUTE FUNCTION set_poll_question_type_for_legacy_writes();
+                """);
 
             migrationBuilder.CreateTable(
                 name: "poll_question_knowledge_settings",
@@ -97,6 +161,13 @@ namespace AnonPulse.Api.Data.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
+            migrationBuilder.Sql("""
+                DROP TRIGGER IF EXISTS trg_poll_questions_10_validate_explicit_type_update ON poll_questions;
+                DROP TRIGGER IF EXISTS trg_poll_questions_20_legacy_insert_type ON poll_questions;
+                DROP TRIGGER IF EXISTS trg_poll_questions_20_legacy_update_type ON poll_questions;
+                DROP FUNCTION IF EXISTS set_poll_question_type_for_legacy_writes();
+                """);
+
             migrationBuilder.DropTable(
                 name: "poll_question_knowledge_settings");
 

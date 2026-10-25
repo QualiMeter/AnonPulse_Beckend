@@ -48,7 +48,6 @@ public sealed class PollQuestionConfiguration : IEntityTypeConfiguration<PollQue
                 value => value == "multiple_choice" ? PollQuestionType.MultipleChoice :
                     value == "text" ? PollQuestionType.Text : PollQuestionType.SingleChoice)
             .HasMaxLength(32)
-            .HasDefaultValue(PollQuestionType.SingleChoice)
             .IsRequired();
         builder.Property(question => question.TextPurpose)
             .HasColumnName("text_purpose")

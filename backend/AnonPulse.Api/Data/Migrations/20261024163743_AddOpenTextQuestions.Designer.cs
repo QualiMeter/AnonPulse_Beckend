@@ -299,10 +299,8 @@ namespace AnonPulse.Api.Data.Migrations
 
                     b.Property<string>("Type")
                         .IsRequired()
-                        .ValueGeneratedOnAdd()
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)")
-                        .HasDefaultValue("single_choice")
                         .HasColumnName("question_type");
 
                     b.HasKey("Id");

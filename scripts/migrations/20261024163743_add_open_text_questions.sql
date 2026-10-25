@@ -3,7 +3,7 @@
 DO $EF$
 BEGIN
     IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261024163743_AddOpenTextQuestions') THEN
-    ALTER TABLE poll_questions ADD question_type character varying(32) NOT NULL DEFAULT 'single_choice';
+    ALTER TABLE poll_questions ADD question_type character varying(32);
     END IF;
 END $EF$;
 
@@ -17,7 +17,71 @@ END $EF$;
 DO $EF$
 BEGIN
     IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261024163743_AddOpenTextQuestions') THEN
-    UPDATE poll_questions SET question_type = 'multiple_choice' WHERE allows_multiple_answers = TRUE;
+    UPDATE poll_questions
+    SET question_type = CASE
+        WHEN allows_multiple_answers THEN 'multiple_choice'
+        ELSE 'single_choice'
+    END;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261024163743_AddOpenTextQuestions') THEN
+    ALTER TABLE poll_questions ALTER COLUMN question_type SET NOT NULL;
+    END IF;
+END $EF$;
+
+DO $EF$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261024163743_AddOpenTextQuestions') THEN
+    CREATE FUNCTION set_poll_question_type_for_legacy_writes()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    AS $function$
+    BEGIN
+        IF TG_NAME = 'trg_poll_questions_10_validate_explicit_type_update' THEN
+            IF ((NEW.question_type = 'multiple_choice') IS DISTINCT FROM NEW.allows_multiple_answers) THEN
+                RAISE EXCEPTION 'question_type and allows_multiple_answers are inconsistent'
+                    USING ERRCODE = '23514',
+                          CONSTRAINT = 'ck_poll_questions_type_legacy_consistent';
+            END IF;
+
+            RETURN NEW;
+        END IF;
+
+        IF TG_OP = 'INSERT' AND NEW.question_type IS NULL THEN
+            NEW.question_type := CASE
+                WHEN NEW.allows_multiple_answers THEN 'multiple_choice'
+                ELSE 'single_choice'
+            END;
+        ELSIF TG_OP = 'UPDATE'
+            AND NEW.allows_multiple_answers IS DISTINCT FROM OLD.allows_multiple_answers
+            AND NEW.question_type IS NOT DISTINCT FROM OLD.question_type THEN
+            NEW.question_type := CASE
+                WHEN NEW.allows_multiple_answers THEN 'multiple_choice'
+                ELSE 'single_choice'
+            END;
+        END IF;
+
+        RETURN NEW;
+    END;
+    $function$;
+
+    CREATE TRIGGER trg_poll_questions_10_validate_explicit_type_update
+    BEFORE UPDATE OF question_type ON poll_questions
+    FOR EACH ROW
+    EXECUTE FUNCTION set_poll_question_type_for_legacy_writes();
+
+    CREATE TRIGGER trg_poll_questions_20_legacy_insert_type
+    BEFORE INSERT ON poll_questions
+    FOR EACH ROW
+    EXECUTE FUNCTION set_poll_question_type_for_legacy_writes();
+
+    CREATE TRIGGER trg_poll_questions_20_legacy_update_type
+    BEFORE UPDATE OF allows_multiple_answers ON poll_questions
+    FOR EACH ROW
+    EXECUTE FUNCTION set_poll_question_type_for_legacy_writes();
     END IF;
 END $EF$;
 
