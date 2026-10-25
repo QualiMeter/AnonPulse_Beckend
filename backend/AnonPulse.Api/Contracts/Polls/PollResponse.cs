@@ -9,4 +9,5 @@ public sealed record PollResponse(
     DateTime? ClosedAt,
     IReadOnlyList<PollQuestionResponse> Questions,
     string? Question,
-    IReadOnlyList<PollOptionResponse> Options);
+    IReadOnlyList<PollOptionResponse> Options,
+    string ResponseMode = "anonymous");

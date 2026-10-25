@@ -14,8 +14,16 @@ public sealed class PollTextAnswerConfiguration : IEntityTypeConfiguration<PollT
         builder.Property(answer => answer.Id).HasColumnName("id");
         builder.Property(answer => answer.QuestionId).HasColumnName("question_id");
         builder.Property(answer => answer.Text).HasColumnName("text").HasMaxLength(4000).IsRequired();
+        builder.Property(answer => answer.IdentifiedSubmissionId)
+            .HasColumnName("identified_submission_id");
         builder.HasIndex(answer => answer.QuestionId);
+        builder.HasIndex(answer => answer.IdentifiedSubmissionId);
         builder.HasOne(answer => answer.Question).WithMany(question => question.TextAnswers)
             .HasForeignKey(answer => answer.QuestionId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(answer => answer.IdentifiedSubmission)
+            .WithMany(submission => submission.TextAnswers)
+            .HasForeignKey(answer => answer.IdentifiedSubmissionId)
+            .OnDelete(DeleteBehavior.Cascade)
+            .HasConstraintName("fk_poll_text_answers_identified_submission");
     }
 }

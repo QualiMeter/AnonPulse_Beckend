@@ -3,7 +3,8 @@ namespace AnonPulse.Api.Contracts.PublicPolls;
 public sealed record PublicPollResponse(
     Guid Id,
     string? Title,
-    IReadOnlyList<PublicPollQuestionResponse> Questions);
+    IReadOnlyList<PublicPollQuestionResponse> Questions,
+    string ResponseMode = "anonymous");
 
 public sealed record PublicPollQuestionResponse(
     Guid Id,

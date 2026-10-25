@@ -66,7 +66,8 @@ public sealed class AdminPollService(ApplicationDbContext dbContext)
                 poll.ClosedAt,
                 poll.Questions.Count,
                 poll.VoteParticipations.Count,
-                poll.Decision != null && poll.Decision.PublishedAt != null))
+                poll.Decision != null && poll.Decision.PublishedAt != null,
+                poll.ResponseMode.ToApiValue()))
             .ToListAsync(cancellationToken);
 
         return new PagedResponse<AdminPollListItemResponse>(
@@ -136,6 +137,7 @@ public sealed class AdminPollService(ApplicationDbContext dbContext)
             questions,
             poll.VoteParticipations.Count,
             voteCount,
-            poll.Decision?.PublishedAt is not null);
+            poll.Decision?.PublishedAt is not null,
+            poll.ResponseMode.ToApiValue());
     }
 }

@@ -76,6 +76,15 @@ public sealed class PublicVotingService(
                 return Conflict("Poll is not open for voting.");
             }
 
+            string? respondentName = NormalizeRespondentName(request.RespondentName);
+            Dictionary<string, string[]>? identityErrors =
+                ValidateRespondentName(poll.ResponseMode, request.RespondentName, respondentName);
+            if (identityErrors is not null)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Invalid(identityErrors);
+            }
+
             List<PollQuestion> questions = await dbContext.PollQuestions
                 .AsNoTracking()
                 .Where(question => question.PollId == pollId)
@@ -99,6 +108,18 @@ public sealed class PublicVotingService(
                 UsedAt = storedTime
             });
 
+            IdentifiedPollSubmission? submission = null;
+            if (poll.ResponseMode == PollResponseMode.Identified)
+            {
+                submission = new IdentifiedPollSubmission
+                {
+                    Id = Guid.NewGuid(),
+                    PollId = pollId,
+                    RespondentName = respondentName!
+                };
+                dbContext.IdentifiedPollSubmissions.Add(submission);
+            }
+
             foreach (VoteAnswerRequest answer in request.Answers!.Cast<VoteAnswerRequest>())
             {
                 if (answer.OptionId is Guid optionId)
@@ -107,7 +128,8 @@ public sealed class PublicVotingService(
                     {
                         Id = Guid.NewGuid(),
                         OptionId = optionId,
-                        CreatedAt = null
+                        CreatedAt = null,
+                        IdentifiedSubmission = submission
                     });
                 }
                 else
@@ -116,7 +138,8 @@ public sealed class PublicVotingService(
                     {
                         Id = Guid.NewGuid(),
                         QuestionId = answer.QuestionId,
-                        Text = answer.Text!.Trim()
+                        Text = answer.Text!.Trim(),
+                        IdentifiedSubmission = submission
                     });
                 }
             }
@@ -283,6 +306,47 @@ public sealed class PublicVotingService(
         return errors.Count == 0 ? null : errors;
     }
 
+    private static Dictionary<string, string[]>? ValidateRespondentName(
+        PollResponseMode responseMode,
+        string? suppliedName,
+        string? normalizedName)
+    {
+        if (responseMode == PollResponseMode.Anonymous)
+        {
+            return suppliedName is null
+                ? null
+                : new Dictionary<string, string[]>
+                {
+                    ["RespondentName"] =
+                        ["RespondentName is not allowed for an anonymous poll."]
+                };
+        }
+
+        if (normalizedName is null || normalizedName.Length > 150)
+        {
+            return new Dictionary<string, string[]>
+            {
+                ["RespondentName"] =
+                    ["RespondentName must contain 1 to 150 characters."]
+            };
+        }
+
+        return null;
+    }
+
+    private static string? NormalizeRespondentName(string? value)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        string normalized = string.Join(
+            ' ',
+            value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return normalized.Length == 0 ? null : normalized;
+    }
+
     private DateTime Coarsen(DateTime utcNow)
     {
         long precisionTicks = options.Value.TimestampPrecision.Ticks;
@@ -334,5 +398,6 @@ public sealed class PublicVotingService(
                     question.Type == PollQuestionType.MultipleChoice,
                     question.Type.ToApiValue(),
                     question.TextPurpose.ToApiValue()))
-                .ToArray());
+                .ToArray(),
+            poll.ResponseMode.ToApiValue());
 }

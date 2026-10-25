@@ -28,6 +28,7 @@ public sealed class PollService(
             CreatorId = creatorId,
             Title = validation.Title,
             Status = PollStatus.Draft,
+            ResponseMode = validation.ResponseMode,
             CreatedAt = timeProvider.GetUtcNow().UtcDateTime
         };
 
@@ -124,9 +125,9 @@ public sealed class PollService(
                 int updatedPolls = await dbContext.Polls
                     .Where(item => item.Id == pollId)
                     .ExecuteUpdateAsync(
-                        setters => setters.SetProperty(
-                            item => item.Title,
-                            validation.Title),
+                        setters => setters
+                            .SetProperty(item => item.Title, validation.Title)
+                            .SetProperty(item => item.ResponseMode, validation.ResponseMode),
                         cancellationToken);
                 if (updatedPolls != 1)
                 {
@@ -150,6 +151,7 @@ public sealed class PollService(
                 dbContext.PollQuestions.RemoveRange(poll.Questions);
                 poll.Questions.Clear();
                 poll.Title = validation.Title;
+                poll.ResponseMode = validation.ResponseMode;
             }
 
             ReplaceContents(poll, validation);
@@ -362,6 +364,18 @@ public sealed class PollService(
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
         string? title = NormalizeOptionalWhitespace(request.Title);
+        PollResponseMode responseMode = request.ResponseMode?.Trim().ToLowerInvariant() switch
+        {
+            null or "" or "anonymous" => PollResponseMode.Anonymous,
+            "identified" => PollResponseMode.Identified,
+            _ => PollResponseMode.Anonymous
+        };
+        if (request.ResponseMode?.Trim().ToLowerInvariant() is not
+            (null or "" or "anonymous" or "identified"))
+        {
+            errors[nameof(request.ResponseMode)] =
+                ["ResponseMode must be 'anonymous' or 'identified'."];
+        }
         bool usesNewFormat = request.Questions is not null;
         bool usesLegacyFormat = request.Question is not null || request.Options is not null;
 
@@ -369,7 +383,7 @@ public sealed class PollService(
         {
             errors[nameof(request.Questions)] =
                 ["Use either 'questions' or legacy 'question' and 'options', not both."];
-            return new PollRequestValidation(title, [], errors);
+            return new PollRequestValidation(title, responseMode, [], errors);
         }
 
         var questions = new List<ValidatedQuestion>();
@@ -419,7 +433,7 @@ public sealed class PollService(
             errors[nameof(request.Questions)] = ["At least one question is required."];
         }
 
-        return new PollRequestValidation(title, questions, errors);
+        return new PollRequestValidation(title, responseMode, questions, errors);
     }
 
     private static ValidatedQuestion ValidateQuestion(
@@ -687,7 +701,8 @@ public sealed class PollService(
             poll.ClosedAt,
             questions,
             legacyQuestion?.Text,
-            legacyQuestion?.Options ?? []);
+            legacyQuestion?.Options ?? [],
+            poll.ResponseMode.ToApiValue());
     }
 
     private static string ToStatusValue(PollStatus status)
@@ -708,6 +723,7 @@ public sealed class PollService(
 
     private sealed record PollRequestValidation(
         string? Title,
+        PollResponseMode ResponseMode,
         IReadOnlyList<ValidatedQuestion> Questions,
         IReadOnlyDictionary<string, string[]> Errors);
 

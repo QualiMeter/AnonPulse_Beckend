@@ -17,10 +17,18 @@ public sealed class VoteConfiguration : IEntityTypeConfiguration<Vote>
         builder.Property(vote => vote.CreatedAt)
             .HasColumnName("created_at")
             .HasColumnType("timestamp with time zone");
+        builder.Property(vote => vote.IdentifiedSubmissionId)
+            .HasColumnName("identified_submission_id");
+        builder.HasIndex(vote => vote.IdentifiedSubmissionId);
 
         builder.HasOne(vote => vote.Option)
             .WithMany(option => option.Votes)
             .HasForeignKey(vote => vote.OptionId)
             .OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(vote => vote.IdentifiedSubmission)
+            .WithMany(submission => submission.Votes)
+            .HasForeignKey(vote => vote.IdentifiedSubmissionId)
+            .OnDelete(DeleteBehavior.Cascade)
+            .HasConstraintName("fk_votes_identified_submission");
     }
 }

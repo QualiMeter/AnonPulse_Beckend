@@ -32,6 +32,9 @@ public class ApplicationDbContext
 
     public DbSet<VoteParticipation> VoteParticipations => Set<VoteParticipation>();
 
+    public DbSet<IdentifiedPollSubmission> IdentifiedPollSubmissions =>
+        Set<IdentifiedPollSubmission>();
+
     public DbSet<Decision> Decisions => Set<Decision>();
 
     public DbSet<AdminAuditEvent> AdminAuditEvents => Set<AdminAuditEvent>();

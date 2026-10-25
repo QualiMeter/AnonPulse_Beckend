@@ -105,6 +105,7 @@ builder.Services.AddScoped<IPollService, PollService>();
 builder.Services.AddScoped<IPollResultsService, PollResultsService>();
 builder.Services.AddScoped<IPublicVotingService, PublicVotingService>();
 builder.Services.AddScoped<IPollTextAnswerService, PollTextAnswerService>();
+builder.Services.AddScoped<IPollSubmissionService, PollSubmissionService>();
 builder.Services.AddOptions<TextAnswerOptions>()
     .Bind(builder.Configuration.GetSection(TextAnswerOptions.SectionName))
     .Validate(options => options.MaximumLength is > 0 and <= TextAnswerOptions.StorageMaximumLength,
