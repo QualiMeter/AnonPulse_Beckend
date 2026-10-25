@@ -65,6 +65,52 @@ public sealed class IdentifiedPollEndpointsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task LegacyUpdateWithoutResponseMode_PreservesIdentifiedDraftMode()
+    {
+        SeededUser teacher = await CreateUserAsync(RoleNames.Teacher);
+        using HttpClient client = _factory.CreateHttpsClient();
+        await LoginAsync(client, teacher);
+        PollResponse poll = await CreatePollAsync(client, "identified");
+
+        HttpResponseMessage legacyUpdate = await client.PutAsJsonAsync(
+            $"/api/polls/{poll.Id}",
+            new
+            {
+                Title = "Updated by legacy client",
+                Question = "Legacy question",
+                Options = new[] { "Yes", "No" }
+            });
+        PollResponse? updated =
+            await legacyUpdate.Content.ReadFromJsonAsync<PollResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, legacyUpdate.StatusCode);
+        Assert.Equal("identified", updated?.ResponseMode);
+        Assert.Equal("Legacy question", Assert.Single(updated!.Questions).Text);
+
+        using IServiceScope scope = _factory.Services.CreateScope();
+        Poll stored = await scope.ServiceProvider.GetRequiredService<ApplicationDbContext>()
+            .Polls.AsNoTracking().SingleAsync(item => item.Id == poll.Id);
+        Assert.Equal(PollResponseMode.Identified, stored.ResponseMode);
+    }
+
+    [Fact]
+    public async Task UpdateWithNullResponseMode_PreservesIdentifiedDraftMode()
+    {
+        SeededUser teacher = await CreateUserAsync(RoleNames.Teacher);
+        using HttpClient client = _factory.CreateHttpsClient();
+        await LoginAsync(client, teacher);
+        PollResponse poll = await CreatePollAsync(client, "identified");
+
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            $"/api/polls/{poll.Id}",
+            MixedPollRequest(responseMode: null));
+        PollResponse? updated = await response.Content.ReadFromJsonAsync<PollResponse>();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("identified", updated?.ResponseMode);
+    }
+
+    [Fact]
     public async Task ResponseMode_CannotChangeAfterPublication()
     {
         SeededUser teacher = await CreateUserAsync(RoleNames.Teacher);

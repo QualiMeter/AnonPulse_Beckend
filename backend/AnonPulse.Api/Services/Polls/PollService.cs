@@ -28,7 +28,7 @@ public sealed class PollService(
             CreatorId = creatorId,
             Title = validation.Title,
             Status = PollStatus.Draft,
-            ResponseMode = validation.ResponseMode,
+            ResponseMode = validation.RequestedResponseMode ?? PollResponseMode.Anonymous,
             CreatedAt = timeProvider.GetUtcNow().UtcDateTime
         };
 
@@ -103,6 +103,9 @@ public sealed class PollService(
                 Error: "Only draft polls can be edited.");
         }
 
+        PollResponseMode updatedResponseMode =
+            validation.RequestedResponseMode ?? poll.ResponseMode;
+
         try
         {
             if (transaction is not null)
@@ -127,7 +130,7 @@ public sealed class PollService(
                     .ExecuteUpdateAsync(
                         setters => setters
                             .SetProperty(item => item.Title, validation.Title)
-                            .SetProperty(item => item.ResponseMode, validation.ResponseMode),
+                            .SetProperty(item => item.ResponseMode, updatedResponseMode),
                         cancellationToken);
                 if (updatedPolls != 1)
                 {
@@ -151,7 +154,7 @@ public sealed class PollService(
                 dbContext.PollQuestions.RemoveRange(poll.Questions);
                 poll.Questions.Clear();
                 poll.Title = validation.Title;
-                poll.ResponseMode = validation.ResponseMode;
+                poll.ResponseMode = updatedResponseMode;
             }
 
             ReplaceContents(poll, validation);
@@ -364,14 +367,16 @@ public sealed class PollService(
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
         string? title = NormalizeOptionalWhitespace(request.Title);
-        PollResponseMode responseMode = request.ResponseMode?.Trim().ToLowerInvariant() switch
-        {
-            null or "" or "anonymous" => PollResponseMode.Anonymous,
-            "identified" => PollResponseMode.Identified,
-            _ => PollResponseMode.Anonymous
-        };
+        PollResponseMode? requestedResponseMode =
+            request.ResponseMode?.Trim().ToLowerInvariant() switch
+            {
+                null => null,
+                "anonymous" => PollResponseMode.Anonymous,
+                "identified" => PollResponseMode.Identified,
+                _ => null
+            };
         if (request.ResponseMode?.Trim().ToLowerInvariant() is not
-            (null or "" or "anonymous" or "identified"))
+            (null or "anonymous" or "identified"))
         {
             errors[nameof(request.ResponseMode)] =
                 ["ResponseMode must be 'anonymous' or 'identified'."];
@@ -383,7 +388,7 @@ public sealed class PollService(
         {
             errors[nameof(request.Questions)] =
                 ["Use either 'questions' or legacy 'question' and 'options', not both."];
-            return new PollRequestValidation(title, responseMode, [], errors);
+            return new PollRequestValidation(title, requestedResponseMode, [], errors);
         }
 
         var questions = new List<ValidatedQuestion>();
@@ -433,7 +438,7 @@ public sealed class PollService(
             errors[nameof(request.Questions)] = ["At least one question is required."];
         }
 
-        return new PollRequestValidation(title, responseMode, questions, errors);
+        return new PollRequestValidation(title, requestedResponseMode, questions, errors);
     }
 
     private static ValidatedQuestion ValidateQuestion(
@@ -723,7 +728,7 @@ public sealed class PollService(
 
     private sealed record PollRequestValidation(
         string? Title,
-        PollResponseMode ResponseMode,
+        PollResponseMode? RequestedResponseMode,
         IReadOnlyList<ValidatedQuestion> Questions,
         IReadOnlyDictionary<string, string[]> Errors);
 
