@@ -98,6 +98,13 @@ public sealed class PollResultsService(ApplicationDbContext dbContext)
                 participation => participation.PollId == pollId,
                 cancellationToken);
 
+        Dictionary<Guid, int> textAnswerCounts = await dbContext.PollTextAnswers
+            .AsNoTracking()
+            .Where(answer => answer.Question.PollId == pollId)
+            .GroupBy(answer => answer.QuestionId)
+            .Select(group => new { QuestionId = group.Key, Count = group.Count() })
+            .ToDictionaryAsync(item => item.QuestionId, item => item.Count, cancellationToken);
+
         var questionResults = new List<PollQuestionResultsResponse>(questions.Length);
         foreach (PollQuestion question in questions)
         {
@@ -106,7 +113,7 @@ public sealed class PollResultsService(ApplicationDbContext dbContext)
                 .ToArray();
             int totalQuestionVotes = options.Sum(option =>
                 voteCounts.GetValueOrDefault(option.Id));
-            int percentageDenominator = question.AllowsMultipleAnswers
+            int percentageDenominator = question.Type == PollQuestionType.MultipleChoice
                 ? totalParticipants
                 : totalQuestionVotes;
 
@@ -124,7 +131,10 @@ public sealed class PollResultsService(ApplicationDbContext dbContext)
                         voteCount,
                         CalculatePercentage(voteCount, percentageDenominator));
                 }).ToArray(),
-                question.AllowsMultipleAnswers));
+                question.Type == PollQuestionType.MultipleChoice,
+                question.Type.ToApiValue(),
+                question.TextPurpose.ToApiValue(),
+                textAnswerCounts.GetValueOrDefault(question.Id)));
         }
 
         return new PollResultsResult(

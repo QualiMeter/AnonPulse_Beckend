@@ -289,6 +289,17 @@ namespace AnonPulse.Api.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("text");
 
+                    b.Property<string>("TextPurpose")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("text_purpose");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("question_type");
+
                     b.HasKey("Id");
 
                     b.HasIndex("PollId");
@@ -302,6 +313,73 @@ namespace AnonPulse.Api.Data.Migrations
                             t.HasCheckConstraint("ck_poll_questions_position_nonnegative", "position >= 0");
 
                             t.HasCheckConstraint("ck_poll_questions_text_not_blank", "btrim(text) <> ''");
+
+                            t.HasCheckConstraint("ck_poll_questions_text_purpose", "(question_type = 'text' AND text_purpose IN ('feedback', 'knowledge')) OR (question_type <> 'text' AND text_purpose IS NULL)");
+
+                            t.HasCheckConstraint("ck_poll_questions_type", "question_type IN ('single_choice', 'multiple_choice', 'text')");
+
+                            t.HasCheckConstraint("ck_poll_questions_type_legacy_consistent", "(question_type = 'multiple_choice') = allows_multiple_answers");
+                        });
+                });
+
+            modelBuilder.Entity("AnonPulse.Api.Models.PollQuestionKnowledgeSettings", b =>
+                {
+                    b.Property<Guid>("QuestionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("question_id");
+
+                    b.Property<string>("ExpectedAnswer")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("expected_answer");
+
+                    b.Property<string>("GradingCriteria")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("grading_criteria");
+
+                    b.Property<int>("MaxScore")
+                        .HasColumnType("integer")
+                        .HasColumnName("max_score");
+
+                    b.HasKey("QuestionId");
+
+                    b.ToTable("poll_question_knowledge_settings", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_poll_question_knowledge_settings_expected_answer", "btrim(expected_answer) <> ''");
+
+                            t.HasCheckConstraint("ck_poll_question_knowledge_settings_grading_criteria", "btrim(grading_criteria) <> ''");
+
+                            t.HasCheckConstraint("ck_poll_question_knowledge_settings_max_score", "max_score BETWEEN 1 AND 100");
+                        });
+                });
+
+            modelBuilder.Entity("AnonPulse.Api.Models.PollTextAnswer", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("QuestionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("question_id");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("QuestionId");
+
+                    b.ToTable("poll_text_answers", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_poll_text_answers_text_not_blank", "btrim(text) <> ''");
                         });
                 });
 
@@ -564,6 +642,28 @@ namespace AnonPulse.Api.Data.Migrations
                     b.Navigation("Poll");
                 });
 
+            modelBuilder.Entity("AnonPulse.Api.Models.PollQuestionKnowledgeSettings", b =>
+                {
+                    b.HasOne("AnonPulse.Api.Models.PollQuestion", "Question")
+                        .WithOne("KnowledgeSettings")
+                        .HasForeignKey("AnonPulse.Api.Models.PollQuestionKnowledgeSettings", "QuestionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Question");
+                });
+
+            modelBuilder.Entity("AnonPulse.Api.Models.PollTextAnswer", b =>
+                {
+                    b.HasOne("AnonPulse.Api.Models.PollQuestion", "Question")
+                        .WithMany("TextAnswers")
+                        .HasForeignKey("QuestionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Question");
+                });
+
             modelBuilder.Entity("AnonPulse.Api.Models.Vote", b =>
                 {
                     b.HasOne("AnonPulse.Api.Models.PollOption", "Option")
@@ -660,7 +760,11 @@ namespace AnonPulse.Api.Data.Migrations
 
             modelBuilder.Entity("AnonPulse.Api.Models.PollQuestion", b =>
                 {
+                    b.Navigation("KnowledgeSettings");
+
                     b.Navigation("Options");
+
+                    b.Navigation("TextAnswers");
                 });
 #pragma warning restore 612, 618
         }

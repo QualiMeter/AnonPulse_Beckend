@@ -93,6 +93,131 @@ public sealed class PublicVotingEndpointsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task MixedChoiceAndTextVote_IsStoredAtomicallyWithoutParticipantLink()
+    {
+        SeededPoll poll = await SeedPollAsync(PollStatus.Open, [2, 0],
+            types: [PollQuestionType.SingleChoice, PollQuestionType.Text]);
+        using HttpClient client = _factory.CreateHttpsClient();
+        HttpResponseMessage get = await client.GetAsync($"/api/public/polls/{poll.Id}");
+        string publicJson = await get.Content.ReadAsStringAsync();
+        PublicPollResponse? view = await get.Content.ReadFromJsonAsync<PublicPollResponse>();
+
+        HttpResponseMessage response = await VoteAsync(client, poll.Id,
+        [
+            new(poll.QuestionIds[0], poll.OptionIds[0][0]),
+            new(poll.QuestionIds[1], Text: "  Транзакции требуют больше примеров.  ")
+        ]);
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Equal("text", view!.Questions[1].Type);
+        Assert.Empty(view.Questions[1].Options);
+        Assert.DoesNotContain("knowledgeSettings", publicJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("expectedAnswer", publicJson, StringComparison.OrdinalIgnoreCase);
+        using IServiceScope scope = _factory.Services.CreateScope();
+        ApplicationDbContext db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        PollTextAnswer answer = Assert.Single(db.PollTextAnswers);
+        Assert.Equal("Транзакции требуют больше примеров.", answer.Text);
+        Assert.Single(db.Votes);
+        Assert.Single(db.VoteParticipations);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task EmptyTextAnswer_Returns400AndPersistsNothing(string text)
+    {
+        SeededPoll poll = await SeedPollAsync(PollStatus.Open, [0],
+            types: [PollQuestionType.Text]);
+        using HttpClient client = _factory.CreateHttpsClient();
+        await client.GetAsync($"/api/public/polls/{poll.Id}");
+
+        HttpResponseMessage response = await VoteAsync(client, poll.Id,
+            [new(poll.QuestionIds[0], Text: text)]);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using IServiceScope scope = _factory.Services.CreateScope();
+        ApplicationDbContext db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.Empty(db.PollTextAnswers);
+        Assert.Empty(db.VoteParticipations);
+    }
+
+    [Fact]
+    public async Task DuplicateTextAnswers_Return400AndPersistNothing()
+    {
+        SeededPoll poll = await SeedPollAsync(PollStatus.Open, [0],
+            types: [PollQuestionType.Text]);
+        using HttpClient client = _factory.CreateHttpsClient();
+        await client.GetAsync($"/api/public/polls/{poll.Id}");
+
+        HttpResponseMessage response = await VoteAsync(client, poll.Id,
+        [
+            new(poll.QuestionIds[0], Text: "First"),
+            new(poll.QuestionIds[0], Text: "Second")
+        ]);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using IServiceScope scope = _factory.Services.CreateScope();
+        ApplicationDbContext db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.Empty(db.PollTextAnswers);
+        Assert.Empty(db.VoteParticipations);
+    }
+
+    [Theory]
+    [InlineData(4000, HttpStatusCode.NoContent)]
+    [InlineData(4001, HttpStatusCode.BadRequest)]
+    public async Task TextAnswerLengthBoundary_IsEnforced(
+        int length,
+        HttpStatusCode expectedStatus)
+    {
+        SeededPoll poll = await SeedPollAsync(PollStatus.Open, [0],
+            types: [PollQuestionType.Text]);
+        using HttpClient client = _factory.CreateHttpsClient();
+        await client.GetAsync($"/api/public/polls/{poll.Id}");
+
+        HttpResponseMessage response = await VoteAsync(client, poll.Id,
+            [new(poll.QuestionIds[0], Text: new string('x', length))]);
+
+        Assert.Equal(expectedStatus, response.StatusCode);
+        using IServiceScope scope = _factory.Services.CreateScope();
+        ApplicationDbContext db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.Equal(expectedStatus == HttpStatusCode.NoContent ? 1 : 0,
+            await db.PollTextAnswers.CountAsync(answer =>
+                answer.Question.PollId == poll.Id));
+        Assert.Equal(expectedStatus == HttpStatusCode.NoContent ? 1 : 0,
+            await db.VoteParticipations.CountAsync(participation =>
+                participation.PollId == poll.Id));
+    }
+
+    [Fact]
+    public async Task ConfiguredRequestBodyLimit_IsAppliedBeforeModelBinding()
+    {
+        SeededPoll poll = await SeedPollAsync(PollStatus.Open, [0],
+            types: [PollQuestionType.Text]);
+        await using var limitedFactory = new PublicVotingWebApplicationFactory(
+            _postgres.GetConnectionString(),
+            new Dictionary<string, string?>
+            {
+                ["TextAnswers:MaximumRequestBodySize"] = "1024"
+            });
+        using HttpClient client = limitedFactory.CreateHttpsClient();
+        await client.GetAsync($"/api/public/polls/{poll.Id}");
+
+        string json = JsonSerializer.Serialize(new SubmitVotesRequest(
+        [
+            new VoteAnswerRequest(poll.QuestionIds[0], Text: new string('x', 2000))
+        ]));
+        using var request = new HttpRequestMessage(HttpMethod.Post,
+            $"/api/public/polls/{poll.Id}/votes");
+        request.Headers.Add("X-AnonPulse-Vote", "1");
+        request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+        HttpResponseMessage response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+        Assert.Equal("application/problem+json",
+            response.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
     public async Task MixedPoll_AllowsSeveralDistinctOptionsOnlyForMultipleChoiceQuestion()
     {
         SeededPoll poll = await SeedPollAsync(
@@ -511,7 +636,8 @@ public sealed class PublicVotingEndpointsTests : IAsyncLifetime
     private async Task<SeededPoll> SeedPollAsync(
         PollStatus status,
         IReadOnlyList<int> optionCounts,
-        IReadOnlyList<bool>? allowsMultipleAnswers = null)
+        IReadOnlyList<bool>? allowsMultipleAnswers = null,
+        IReadOnlyList<PollQuestionType>? types = null)
     {
         using IServiceScope scope = _factory.Services.CreateScope();
         ApplicationDbContext db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
@@ -541,7 +667,13 @@ public sealed class PublicVotingEndpointsTests : IAsyncLifetime
                 PollId = poll.Id,
                 Text = $"Question {questionIndex}",
                 Position = questionIndex,
-                AllowsMultipleAnswers = allowsMultipleAnswers?[questionIndex] ?? false
+                Type = types?[questionIndex] ??
+                    (allowsMultipleAnswers?[questionIndex] == true
+                        ? PollQuestionType.MultipleChoice
+                        : PollQuestionType.SingleChoice),
+                TextPurpose = types?[questionIndex] == PollQuestionType.Text
+                    ? TextQuestionPurpose.Feedback
+                    : null
             };
             questionIds.Add(question.Id);
             var currentOptions = new List<Guid>();

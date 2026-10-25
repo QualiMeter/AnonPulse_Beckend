@@ -87,6 +87,8 @@ public sealed class AdminPollService(ApplicationDbContext dbContext)
             .Include(item => item.Creator)
             .Include(item => item.Questions)
             .ThenInclude(question => question.Options)
+            .Include(item => item.Questions)
+            .ThenInclude(question => question.KnowledgeSettings)
             .Include(item => item.VoteParticipations)
             .Include(item => item.Decision)
             .SingleOrDefaultAsync(item => item.Id == pollId, cancellationToken);
@@ -113,7 +115,13 @@ public sealed class AdminPollService(ApplicationDbContext dbContext)
                         option.Text,
                         option.Position))
                     .ToArray(),
-                question.AllowsMultipleAnswers))
+                question.Type == PollQuestionType.MultipleChoice,
+                question.Type.ToApiValue(),
+                question.TextPurpose.ToApiValue(),
+                question.KnowledgeSettings is null ? null : new KnowledgeQuestionSettingsResponse(
+                    question.KnowledgeSettings.ExpectedAnswer,
+                    question.KnowledgeSettings.GradingCriteria,
+                    question.KnowledgeSettings.MaxScore)))
             .ToArray();
 
         return new AdminPollDetailsResponse(

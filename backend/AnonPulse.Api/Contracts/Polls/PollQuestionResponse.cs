@@ -5,4 +5,12 @@ public sealed record PollQuestionResponse(
     string Text,
     int Position,
     IReadOnlyList<PollOptionResponse> Options,
-    bool AllowsMultipleAnswers = false);
+    bool AllowsMultipleAnswers = false,
+    string Type = "single_choice",
+    string? TextPurpose = null,
+    KnowledgeQuestionSettingsResponse? KnowledgeSettings = null);
+
+public sealed record KnowledgeQuestionSettingsResponse(
+    string ExpectedAnswer,
+    string GradingCriteria,
+    int MaxScore);

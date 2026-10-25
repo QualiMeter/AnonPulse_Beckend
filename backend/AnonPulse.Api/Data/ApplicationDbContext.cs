@@ -23,6 +23,11 @@ public class ApplicationDbContext
 
     public DbSet<PollOption> PollOptions => Set<PollOption>();
 
+    public DbSet<PollTextAnswer> PollTextAnswers => Set<PollTextAnswer>();
+
+    public DbSet<PollQuestionKnowledgeSettings> PollQuestionKnowledgeSettings =>
+        Set<PollQuestionKnowledgeSettings>();
+
     public DbSet<Vote> Votes => Set<Vote>();
 
     public DbSet<VoteParticipation> VoteParticipations => Set<VoteParticipation>();

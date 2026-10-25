@@ -5,4 +5,5 @@ public sealed record SubmitVotesRequest(
 
 public sealed record VoteAnswerRequest(
     Guid QuestionId,
-    Guid OptionId);
+    Guid? OptionId = null,
+    string? Text = null);

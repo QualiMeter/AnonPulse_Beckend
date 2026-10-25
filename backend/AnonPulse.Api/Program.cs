@@ -104,6 +104,16 @@ builder.Services.AddScoped<IAdminAuditService, AdminAuditService>();
 builder.Services.AddScoped<IPollService, PollService>();
 builder.Services.AddScoped<IPollResultsService, PollResultsService>();
 builder.Services.AddScoped<IPublicVotingService, PublicVotingService>();
+builder.Services.AddScoped<IPollTextAnswerService, PollTextAnswerService>();
+builder.Services.AddOptions<TextAnswerOptions>()
+    .Bind(builder.Configuration.GetSection(TextAnswerOptions.SectionName))
+    .Validate(options => options.MaximumLength is > 0 and <= TextAnswerOptions.StorageMaximumLength,
+        "Text answer maximum length must be between 1 and 4000.")
+    .Validate(options => options.MaximumRequestBodySize is >= 1024 and <= 10_485_760,
+        "Text answer request body limit must be between 1 KiB and 10 MiB.")
+    .Validate(options => options.MaximumAnswersPerRequest is > 0 and <= 1000,
+        "Maximum answers per request must be between 1 and 1000.")
+    .ValidateOnStart();
 builder.Services.AddSingleton<IAnonymousVoterTokenService, AnonymousVoterTokenService>();
 builder.Services.AddSingleton<IAnonymousVotingSessionRateLimiter,
     AnonymousVotingSessionRateLimiter>();

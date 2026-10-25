@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using AnonPulse.Api.Contracts.Admin;
 using AnonPulse.Api.Contracts.Auth;
+using AnonPulse.Api.Contracts.Polls;
 using AnonPulse.Api.Data;
 using AnonPulse.Api.Models;
 using AnonPulse.Api.Tests.Auth;
@@ -266,7 +267,7 @@ public sealed class AdminApiEndpointsTests : IAsyncLifetime
             item.TargetId == poll.Id &&
             item.ActionType == AdminAuditActionTypes.PollDeleted);
         Assert.DoesNotContain("token", audit.MetadataJson, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("answer", audit.MetadataJson, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("textAnswers", audit.MetadataJson, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -412,6 +413,84 @@ public sealed class AdminApiEndpointsTests : IAsyncLifetime
         Assert.DoesNotContain("tokenHash", body, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task TextAnswers_OwnerCanReadClosedPollWithStablePagination()
+    {
+        SeededUser owner = await CreateUserAsync(RoleNames.Teacher);
+        (Poll poll, PollQuestion question) = await SeedTextPollAsync(
+            owner.Id, PollStatus.Closed, 3);
+        using HttpClient client = _factory.CreateHttpsClient();
+        await LoginAsync(client, owner);
+
+        HttpResponseMessage firstResponse = await client.GetAsync(
+            $"/api/polls/{poll.Id}/questions/{question.Id}/text-answers?page=1&pageSize=2");
+        PagedResponse<PollTextAnswerResponse>? first =
+            await firstResponse.Content.ReadFromJsonAsync<
+                PagedResponse<PollTextAnswerResponse>>();
+        HttpResponseMessage secondResponse = await client.GetAsync(
+            $"/api/polls/{poll.Id}/questions/{question.Id}/text-answers?page=2&pageSize=2");
+        PagedResponse<PollTextAnswerResponse>? second =
+            await secondResponse.Content.ReadFromJsonAsync<
+                PagedResponse<PollTextAnswerResponse>>();
+        HttpResponseMessage hugePageResponse = await client.GetAsync(
+            $"/api/polls/{poll.Id}/questions/{question.Id}/text-answers?page={int.MaxValue}&pageSize=100");
+        PagedResponse<PollTextAnswerResponse>? hugePage =
+            await hugePageResponse.Content.ReadFromJsonAsync<
+                PagedResponse<PollTextAnswerResponse>>();
+
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+        Assert.Equal(2, first!.Items.Count);
+        Assert.Equal(3, first.TotalCount);
+        Assert.Equal(2, first.TotalPages);
+        Assert.Equal(HttpStatusCode.OK, secondResponse.StatusCode);
+        Assert.Single(second!.Items);
+        Assert.Equal(HttpStatusCode.OK, hugePageResponse.StatusCode);
+        Assert.Empty(hugePage!.Items);
+    }
+
+    [Fact]
+    public async Task TextAnswers_EnforceOwnerAdminAndAuthenticationAccess()
+    {
+        SeededUser owner = await CreateUserAsync(RoleNames.Teacher);
+        SeededUser otherTeacher = await CreateUserAsync(RoleNames.Teacher);
+        SeededUser admin = await CreateUserAsync(RoleNames.Admin);
+        (Poll poll, PollQuestion question) = await SeedTextPollAsync(
+            owner.Id, PollStatus.Closed, 1);
+        string uri = $"/api/polls/{poll.Id}/questions/{question.Id}/text-answers";
+        using HttpClient anonymous = _factory.CreateHttpsClient();
+        using HttpClient foreign = _factory.CreateHttpsClient();
+        using HttpClient administrator = _factory.CreateHttpsClient();
+        await LoginAsync(foreign, otherTeacher);
+        await LoginAsync(administrator, admin);
+
+        HttpResponseMessage anonymousResponse = await anonymous.GetAsync(uri);
+        HttpResponseMessage foreignResponse = await foreign.GetAsync(uri);
+        HttpResponseMessage adminResponse = await administrator.GetAsync(uri);
+
+        AssertProblem(anonymousResponse, HttpStatusCode.Unauthorized);
+        AssertProblem(foreignResponse, HttpStatusCode.NotFound);
+        Assert.Equal(HttpStatusCode.OK, adminResponse.StatusCode);
+        PagedResponse<PollTextAnswerResponse>? page =
+            await adminResponse.Content.ReadFromJsonAsync<
+                PagedResponse<PollTextAnswerResponse>>();
+        Assert.Single(page!.Items);
+    }
+
+    [Fact]
+    public async Task TextAnswers_OpenPollReturnsConflict()
+    {
+        SeededUser owner = await CreateUserAsync(RoleNames.Teacher);
+        (Poll poll, PollQuestion question) = await SeedTextPollAsync(
+            owner.Id, PollStatus.Open, 1);
+        using HttpClient client = _factory.CreateHttpsClient();
+        await LoginAsync(client, owner);
+
+        HttpResponseMessage response = await client.GetAsync(
+            $"/api/polls/{poll.Id}/questions/{question.Id}/text-answers");
+
+        AssertProblem(response, HttpStatusCode.Conflict);
+    }
+
     private async Task<SeededUser> CreateUserAsync(params string[] roles)
     {
         using IServiceScope scope = _factory.Services.CreateScope();
@@ -522,6 +601,47 @@ public sealed class AdminApiEndpointsTests : IAsyncLifetime
         db.Polls.Add(poll);
         await db.SaveChangesAsync();
         return poll;
+    }
+
+    private async Task<(Poll Poll, PollQuestion Question)> SeedTextPollAsync(
+        Guid creatorId,
+        PollStatus status,
+        int answerCount)
+    {
+        using IServiceScope scope = _factory.Services.CreateScope();
+        ApplicationDbContext db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        var poll = new Poll
+        {
+            Id = Guid.NewGuid(),
+            CreatorId = creatorId,
+            Title = "Text answers",
+            Status = status,
+            CreatedAt = DateTime.UtcNow,
+            PublishedAt = status == PollStatus.Draft ? null : DateTime.UtcNow,
+            ClosedAt = status == PollStatus.Closed ? DateTime.UtcNow : null
+        };
+        var question = new PollQuestion
+        {
+            Id = Guid.NewGuid(),
+            PollId = poll.Id,
+            Text = "Feedback",
+            Position = 0,
+            Type = PollQuestionType.Text,
+            TextPurpose = TextQuestionPurpose.Feedback
+        };
+        for (int index = 0; index < answerCount; index++)
+        {
+            question.TextAnswers.Add(new PollTextAnswer
+            {
+                Id = Guid.NewGuid(),
+                QuestionId = question.Id,
+                Text = $"Answer {index}"
+            });
+        }
+        poll.Questions.Add(question);
+        db.Polls.Add(poll);
+        await db.SaveChangesAsync();
+        return (poll, question);
     }
 
     private static async Task LoginAsync(HttpClient client, SeededUser user)

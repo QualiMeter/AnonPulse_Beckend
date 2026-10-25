@@ -11,8 +11,17 @@ namespace AnonPulse.Api.Services.Voting;
 public sealed class PublicVotingService(
     ApplicationDbContext dbContext,
     TimeProvider timeProvider,
-    IOptions<AnonymousVoterOptions> options) : IPublicVotingService
+    IOptions<AnonymousVoterOptions> options,
+    IOptions<TextAnswerOptions> textAnswerOptions) : IPublicVotingService
 {
+    public PublicVotingService(
+        ApplicationDbContext dbContext,
+        TimeProvider timeProvider,
+        IOptions<AnonymousVoterOptions> options)
+        : this(dbContext, timeProvider, options, Options.Create(new TextAnswerOptions()))
+    {
+    }
+
     private const string ParticipationUniqueConstraint =
         "ux_vote_participations_poll_id_token_hash";
 
@@ -74,7 +83,7 @@ public sealed class PublicVotingService(
                 .ToListAsync(cancellationToken);
 
             Dictionary<string, string[]>? answerErrors =
-                ValidateAnswers(request.Answers!, questions);
+                ValidateAnswers(request.Answers!, questions, textAnswerOptions.Value.MaximumLength);
             if (answerErrors is not null)
             {
                 await transaction.RollbackAsync(cancellationToken);
@@ -92,12 +101,24 @@ public sealed class PublicVotingService(
 
             foreach (VoteAnswerRequest answer in request.Answers!.Cast<VoteAnswerRequest>())
             {
-                dbContext.Votes.Add(new Vote
+                if (answer.OptionId is Guid optionId)
                 {
-                    Id = Guid.NewGuid(),
-                    OptionId = answer.OptionId,
-                    CreatedAt = null
-                });
+                    dbContext.Votes.Add(new Vote
+                    {
+                        Id = Guid.NewGuid(),
+                        OptionId = optionId,
+                        CreatedAt = null
+                    });
+                }
+                else
+                {
+                    dbContext.PollTextAnswers.Add(new PollTextAnswer
+                    {
+                        Id = Guid.NewGuid(),
+                        QuestionId = answer.QuestionId,
+                        Text = answer.Text!.Trim()
+                    });
+                }
             }
 
             await dbContext.SaveChangesAsync(cancellationToken);
@@ -137,6 +158,14 @@ public sealed class PublicVotingService(
             };
         }
 
+        if (request.Answers.Count > textAnswerOptions.Value.MaximumAnswersPerRequest)
+        {
+            return new Dictionary<string, string[]>
+            {
+                [nameof(request.Answers)] = ["Too many answers were submitted."]
+            };
+        }
+
         var errors = new Dictionary<string, string[]>();
         for (int index = 0; index < request.Answers.Count; index++)
         {
@@ -154,7 +183,7 @@ public sealed class PublicVotingService(
 
             if (answer.OptionId == Guid.Empty)
             {
-                errors[$"Answers[{index}].OptionId"] = ["OptionId is required."];
+                errors[$"Answers[{index}].OptionId"] = ["OptionId must not be empty."];
             }
         }
 
@@ -163,11 +192,13 @@ public sealed class PublicVotingService(
 
     private static Dictionary<string, string[]>? ValidateAnswers(
         IReadOnlyList<VoteAnswerRequest?> answers,
-        IReadOnlyCollection<PollQuestion> questions)
+        IReadOnlyCollection<PollQuestion> questions,
+        int maximumTextLength)
     {
         var errors = new Dictionary<string, string[]>();
         Dictionary<Guid, PollQuestion> questionById = questions.ToDictionary(item => item.Id);
         var selectedOptionsByQuestion = new Dictionary<Guid, HashSet<Guid>>();
+        var textAnswersByQuestion = new Dictionary<Guid, int>();
 
         for (int index = 0; index < answers.Count; index++)
         {
@@ -179,7 +210,31 @@ public sealed class PublicVotingService(
                 continue;
             }
 
-            if (question.Options.All(option => option.Id != answer.OptionId))
+            if (question.Type == PollQuestionType.Text)
+            {
+                if (answer.OptionId is not null)
+                {
+                    errors[$"Answers[{index}].OptionId"] =
+                        ["OptionId is not allowed for a text question."];
+                }
+                string text = answer.Text?.Trim() ?? string.Empty;
+                if (text.Length == 0 || text.Length > maximumTextLength)
+                {
+                    errors[$"Answers[{index}].Text"] =
+                        [$"Text must contain 1 to {maximumTextLength} characters."];
+                }
+                textAnswersByQuestion[question.Id] =
+                    textAnswersByQuestion.GetValueOrDefault(question.Id) + 1;
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(answer.Text))
+            {
+                errors[$"Answers[{index}].Text"] =
+                    ["Text is not allowed for a choice question."];
+            }
+            if (answer.OptionId is null ||
+                question.Options.All(option => option.Id != answer.OptionId.Value))
             {
                 errors[$"Answers[{index}].OptionId"] =
                     ["Option does not belong to the specified question."];
@@ -194,7 +249,7 @@ public sealed class PublicVotingService(
                 selectedOptionsByQuestion.Add(question.Id, selectedOptions);
             }
 
-            if (!selectedOptions.Add(answer.OptionId))
+            if (!selectedOptions.Add(answer.OptionId.Value))
             {
                 errors[$"Answers[{index}].OptionId"] =
                     ["The same option may not be selected more than once."];
@@ -203,13 +258,22 @@ public sealed class PublicVotingService(
 
         foreach (PollQuestion question in questions)
         {
+            if (question.Type == PollQuestionType.Text)
+            {
+                if (textAnswersByQuestion.GetValueOrDefault(question.Id) != 1)
+                {
+                    errors[$"Questions[{question.Id}]"] =
+                        ["Exactly one text answer is required for this question."];
+                }
+                continue;
+            }
             int selectedCount = selectedOptionsByQuestion
                 .GetValueOrDefault(question.Id)?.Count ?? 0;
             if (selectedCount == 0)
             {
                 errors[$"Questions[{question.Id}]"] = ["Question must be answered."];
             }
-            else if (!question.AllowsMultipleAnswers && selectedCount != 1)
+            else if (question.Type == PollQuestionType.SingleChoice && selectedCount != 1)
             {
                 errors[$"Questions[{question.Id}]"] =
                     ["Exactly one option must be selected for this question."];
@@ -267,6 +331,8 @@ public sealed class PublicVotingService(
                             option.Text,
                             option.Position))
                         .ToArray(),
-                    question.AllowsMultipleAnswers))
+                    question.Type == PollQuestionType.MultipleChoice,
+                    question.Type.ToApiValue(),
+                    question.TextPurpose.ToApiValue()))
                 .ToArray());
 }
