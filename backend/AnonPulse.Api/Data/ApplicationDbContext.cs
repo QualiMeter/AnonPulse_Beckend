@@ -37,6 +37,16 @@ public class ApplicationDbContext
     public DbSet<IdentifiedPollSubmission> IdentifiedPollSubmissions =>
         Set<IdentifiedPollSubmission>();
 
+    public DbSet<PollQuestionCorrectOption> PollQuestionCorrectOptions =>
+        Set<PollQuestionCorrectOption>();
+
+    public DbSet<NamedAttempt> NamedAttempts => Set<NamedAttempt>();
+
+    public DbSet<NamedAttemptAnswer> NamedAttemptAnswers => Set<NamedAttemptAnswer>();
+
+    public DbSet<NamedAttemptAnswerOption> NamedAttemptAnswerOptions =>
+        Set<NamedAttemptAnswerOption>();
+
     public DbSet<Decision> Decisions => Set<Decision>();
 
     public DbSet<AdminAuditEvent> AdminAuditEvents => Set<AdminAuditEvent>();

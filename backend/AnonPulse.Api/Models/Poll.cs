@@ -12,6 +12,10 @@ public sealed class Poll
 
     public PollResponseMode ResponseMode { get; set; } = PollResponseMode.Anonymous;
 
+    public PollKind Kind { get; set; } = PollKind.Survey;
+
+    public int? TestScale { get; set; }
+
     public DateTime CreatedAt { get; set; }
 
     public DateTime? PublishedAt { get; set; }
@@ -27,6 +31,8 @@ public sealed class Poll
     public ICollection<VoteParticipation> VoteParticipations { get; } = [];
 
     public ICollection<IdentifiedPollSubmission> IdentifiedSubmissions { get; } = [];
+
+    public ICollection<NamedAttempt> NamedAttempts { get; } = [];
 
     public Decision? Decision { get; set; }
 

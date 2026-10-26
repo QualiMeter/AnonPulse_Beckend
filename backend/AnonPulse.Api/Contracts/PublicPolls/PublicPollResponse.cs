@@ -4,7 +4,9 @@ public sealed record PublicPollResponse(
     Guid Id,
     string? Title,
     IReadOnlyList<PublicPollQuestionResponse> Questions,
-    string ResponseMode = "anonymous");
+    string ResponseMode = "anonymous",
+    string Kind = "survey",
+    int? TestScale = null);
 
 public sealed record PublicPollQuestionResponse(
     Guid Id,

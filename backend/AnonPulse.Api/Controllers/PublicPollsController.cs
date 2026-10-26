@@ -25,7 +25,10 @@ public sealed class PublicPollsController(
 
         if (result.Outcome == PublicPollOutcome.Succeeded)
         {
-            tokenService.GetOrCreateToken(HttpContext);
+            if (string.Equals(result.Poll!.Kind, "survey", StringComparison.Ordinal))
+            {
+                tokenService.GetOrCreateToken(HttpContext);
+            }
             return Ok(result.Poll);
         }
 

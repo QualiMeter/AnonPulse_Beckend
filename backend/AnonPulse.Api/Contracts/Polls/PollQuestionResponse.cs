@@ -8,7 +8,9 @@ public sealed record PollQuestionResponse(
     bool AllowsMultipleAnswers = false,
     string Type = "single_choice",
     string? TextPurpose = null,
-    KnowledgeQuestionSettingsResponse? KnowledgeSettings = null);
+    KnowledgeQuestionSettingsResponse? KnowledgeSettings = null,
+    decimal? Weight = null,
+    IReadOnlyList<Guid>? CorrectOptionIds = null);
 
 public sealed record KnowledgeQuestionSettingsResponse(
     string ExpectedAnswer,

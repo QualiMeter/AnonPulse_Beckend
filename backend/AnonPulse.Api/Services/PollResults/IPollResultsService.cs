@@ -21,6 +21,7 @@ public enum PollResultsOutcome
     Succeeded,
     NotFound,
     NotPublished,
+    NotAvailableForTest,
     Unauthorized,
     Forbidden
 }

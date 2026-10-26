@@ -10,6 +10,7 @@ using AnonPulse.Api.Services.Polls;
 using AnonPulse.Api.Services.PollResults;
 using AnonPulse.Api.Services.Voting;
 using AnonPulse.Api.Services.FeedbackAnalysis;
+using AnonPulse.Api.Services.Tests;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -107,6 +108,8 @@ builder.Services.AddScoped<IPollResultsService, PollResultsService>();
 builder.Services.AddScoped<IPublicVotingService, PublicVotingService>();
 builder.Services.AddScoped<IPollTextAnswerService, PollTextAnswerService>();
 builder.Services.AddScoped<IPollSubmissionService, PollSubmissionService>();
+builder.Services.AddScoped<ITestSubmissionService, TestSubmissionService>();
+builder.Services.AddScoped<ITestAttemptService, TestAttemptService>();
 builder.Services.AddScoped<IFeedbackAnalysisService, FeedbackAnalysisService>();
 builder.Services.AddScoped<IFeedbackAnalysisJobProcessor, FeedbackAnalysisJobProcessor>();
 builder.Services.AddScoped<IFeedbackAnalysisJobQueue, FeedbackAnalysisJobQueue>();
@@ -171,6 +174,13 @@ builder.Services.AddOptions<AnonymousVoterOptions>()
     .Validate(options => options.SessionTrackingRetention >= options.RateLimitWindow,
         "Session tracking retention must not be shorter than the rate-limit window.")
     .ValidateOnStart();
+builder.Services.AddOptions<TestSubmissionRateLimitOptions>()
+    .Bind(builder.Configuration.GetSection(TestSubmissionRateLimitOptions.SectionName))
+    .Validate(options => options.RateLimitWindow > TimeSpan.Zero,
+        "Test submission rate-limit window must be greater than zero.")
+    .Validate(options => options.RequestsPerClient is > 0 and <= 10_000,
+        "Test submission rate limit must be between 1 and 10000 requests per window.")
+    .ValidateOnStart();
 builder.Services.AddRateLimiter(rateLimiterOptions =>
 {
     int permitLimit = builder.Configuration.GetValue<int?>(
@@ -188,6 +198,27 @@ builder.Services.AddRateLimiter(rateLimiterOptions =>
                 QueueLimit = 0,
                 AutoReplenishment = true
             }));
+    int testPermitLimit = builder.Configuration.GetValue<int?>(
+        $"{TestSubmissionRateLimitOptions.SectionName}:RequestsPerClient") ?? 120;
+    TimeSpan testWindow = builder.Configuration.GetValue<TimeSpan?>(
+        $"{TestSubmissionRateLimitOptions.SectionName}:RateLimitWindow") ??
+        TimeSpan.FromMinutes(1);
+    rateLimiterOptions.AddPolicy("public-test-submissions", context =>
+    {
+        // Use only the peer address established by the server. In particular, do not
+        // partition on client-controlled identity fields or X-Forwarded-For.
+        string peerAddress = context.Connection.RemoteIpAddress?.ToString() ??
+                             "unknown-peer";
+        return RateLimitPartition.GetFixedWindowLimiter(
+            $"public-test-submissions:{peerAddress}",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = testPermitLimit,
+                Window = testWindow,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            });
+    });
     rateLimiterOptions.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 });
 builder.Services
