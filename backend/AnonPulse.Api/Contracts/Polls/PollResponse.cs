@@ -10,4 +10,6 @@ public sealed record PollResponse(
     IReadOnlyList<PollQuestionResponse> Questions,
     string? Question,
     IReadOnlyList<PollOptionResponse> Options,
-    string ResponseMode = "anonymous");
+    string ResponseMode = "anonymous",
+    string Kind = "survey",
+    int? TestScale = null);

@@ -39,6 +39,9 @@ public sealed class FeedbackAnalysisMigrationTests : IAsyncLifetime
                 MigrationsSqlGenerationOptions.Idempotent);
             Assert.Equal(Normalize(generated), Normalize(await File.ReadAllTextAsync(FindScript())));
             await migrate.Database.ExecuteSqlRawAsync(generated);
+            // Keep the historical script assertion isolated, then upgrade before
+            // current-model services query PollQuestion columns added by later PRs.
+            await migrator.MigrateAsync();
         }
 
         Guid owner = Guid.NewGuid(), poll = Guid.NewGuid(), question = Guid.NewGuid();

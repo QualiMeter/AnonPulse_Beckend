@@ -76,6 +76,12 @@ public sealed class PublicVotingService(
                 return Conflict("Poll is not open for voting.");
             }
 
+            if (poll.Kind != PollKind.Survey)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return Conflict("Tests must be submitted through the test-submissions endpoint.");
+            }
+
             string? respondentName = NormalizeRespondentName(request.RespondentName);
             Dictionary<string, string[]>? identityErrors =
                 ValidateRespondentName(poll.ResponseMode, request.RespondentName, respondentName);
@@ -399,5 +405,7 @@ public sealed class PublicVotingService(
                     question.Type.ToApiValue(),
                     question.TextPurpose.ToApiValue()))
                 .ToArray(),
-            poll.ResponseMode.ToApiValue());
+            poll.ResponseMode.ToApiValue(),
+            poll.Kind.ToApiValue(),
+            poll.TestScale);
 }

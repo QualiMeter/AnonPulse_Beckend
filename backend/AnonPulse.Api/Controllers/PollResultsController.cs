@@ -46,6 +46,12 @@ public sealed class PollResultsController(IPollResultsService pollResultsService
                 Title = "Poll results are not available.",
                 Detail = "Results are available only after the poll is published."
             }),
+            PollResultsOutcome.NotAvailableForTest => Conflict(new ProblemDetails
+            {
+                Status = StatusCodes.Status409Conflict,
+                Title = "Survey aggregate results are not available for tests.",
+                Detail = "Use the protected test-attempts endpoint after the test is closed."
+            }),
             PollResultsOutcome.Unauthorized => Problem(
                 statusCode: StatusCodes.Status401Unauthorized,
                 title: "Authentication is required.",

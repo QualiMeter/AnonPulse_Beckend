@@ -17,6 +17,13 @@ public sealed class PollConfiguration : IEntityTypeConfiguration<Poll>
             tableBuilder.HasCheckConstraint(
                 "ck_polls_response_mode",
                 "response_mode IN ('anonymous', 'identified')");
+            tableBuilder.HasCheckConstraint(
+                "ck_polls_kind",
+                "kind IN ('survey', 'test')");
+            tableBuilder.HasCheckConstraint(
+                "ck_polls_test_configuration",
+                "(kind = 'survey' AND test_scale IS NULL) OR " +
+                "(kind = 'test' AND response_mode = 'identified' AND test_scale IN (5, 10, 12, 100))");
         });
 
         builder.HasKey(poll => poll.Id);
@@ -39,6 +46,14 @@ public sealed class PollConfiguration : IEntityTypeConfiguration<Poll>
             .HasConversion(new ValueConverter<PollResponseMode, string>(
                 mode => mode.ToApiValue(),
                 value => Enum.Parse<PollResponseMode>(value, true)));
+        builder.Property(poll => poll.Kind)
+            .HasColumnName("kind")
+            .HasMaxLength(16)
+            .HasDefaultValue(PollKind.Survey)
+            .HasConversion(new ValueConverter<PollKind, string>(
+                kind => kind.ToApiValue(),
+                value => Enum.Parse<PollKind>(value, true)));
+        builder.Property(poll => poll.TestScale).HasColumnName("test_scale");
         builder.Property(poll => poll.CreatedAt)
             .HasColumnName("created_at")
             .HasColumnType("timestamp with time zone");

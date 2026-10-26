@@ -39,6 +39,8 @@ public sealed class PollQuestion
 
     public TextQuestionPurpose? TextPurpose { get; set; }
 
+    public decimal? TestWeight { get; set; }
+
     public Poll Poll { get; set; } = null!;
 
     public ICollection<PollOption> Options { get; } = [];
@@ -46,6 +48,8 @@ public sealed class PollQuestion
     public ICollection<PollTextAnswer> TextAnswers { get; } = [];
 
     public PollQuestionKnowledgeSettings? KnowledgeSettings { get; set; }
+
+    public ICollection<PollQuestionCorrectOption> CorrectOptions { get; } = [];
 
     public ICollection<PollFeedbackAnalysis> FeedbackAnalyses { get; } = [];
 }

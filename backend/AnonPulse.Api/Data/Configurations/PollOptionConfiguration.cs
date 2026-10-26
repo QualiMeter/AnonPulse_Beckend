@@ -19,6 +19,8 @@ public sealed class PollOptionConfiguration : IEntityTypeConfiguration<PollOptio
         });
 
         builder.HasKey(option => option.Id);
+        builder.HasAlternateKey(option => new { option.QuestionId, option.Id })
+            .HasName("ak_poll_options_question_id_id");
 
         builder.Property(option => option.Id).HasColumnName("id");
         builder.Property(option => option.QuestionId).HasColumnName("question_id");

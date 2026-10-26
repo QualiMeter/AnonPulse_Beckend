@@ -39,12 +39,17 @@ public sealed class PollResultsService(ApplicationDbContext dbContext)
         PollHeader? poll = await dbContext.Polls
             .AsNoTracking()
             .Where(item => item.Id == pollId)
-            .Select(item => new PollHeader(item.Id, item.CreatorId, item.Status))
+            .Select(item => new PollHeader(item.Id, item.CreatorId, item.Status, item.Kind))
             .SingleOrDefaultAsync(cancellationToken);
 
         if (poll is null)
         {
             return new PollResultsResult(PollResultsOutcome.NotFound);
+        }
+
+        if (poll.Kind == PollKind.Test)
+        {
+            return new PollResultsResult(PollResultsOutcome.NotAvailableForTest);
         }
 
         if (poll.Status == PollStatus.Draft)
@@ -168,5 +173,9 @@ public sealed class PollResultsService(ApplicationDbContext dbContext)
             $"Results are not available for poll status {status}.")
     };
 
-    private sealed record PollHeader(Guid Id, Guid CreatorId, PollStatus Status);
+    private sealed record PollHeader(
+        Guid Id,
+        Guid CreatorId,
+        PollStatus Status,
+        PollKind Kind);
 }

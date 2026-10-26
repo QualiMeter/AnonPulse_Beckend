@@ -67,6 +67,9 @@ public sealed class IdentifiedPollMigrationTests : IAsyncLifetime
                 MigrationsSqlGenerationOptions.Idempotent);
             Assert.Equal(NormalizeSql(generatedScript), NormalizeSql(manualScript));
             await context.Database.ExecuteSqlRawAsync(manualScript);
+            // Historical migration is verified above. Bring the schema to the current
+            // model before materializing entities that include columns added later.
+            await migrator.MigrateAsync();
         }
 
         await using var verify = new ApplicationDbContext(options);

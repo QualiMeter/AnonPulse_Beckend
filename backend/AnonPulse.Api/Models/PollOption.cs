@@ -13,4 +13,8 @@ public sealed class PollOption
     public PollQuestion Question { get; set; } = null!;
 
     public ICollection<Vote> Votes { get; } = [];
+
+    public ICollection<PollQuestionCorrectOption> CorrectForQuestions { get; } = [];
+
+    public ICollection<NamedAttemptAnswerOption> TestAnswerSelections { get; } = [];
 }

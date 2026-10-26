@@ -26,6 +26,9 @@ public sealed class PollQuestionConfiguration : IEntityTypeConfiguration<PollQue
                 "ck_poll_questions_text_purpose",
                 "(question_type = 'text' AND text_purpose IN ('feedback', 'knowledge')) OR " +
                 "(question_type <> 'text' AND text_purpose IS NULL)");
+            tableBuilder.HasCheckConstraint(
+                "ck_poll_questions_test_weight",
+                "test_weight IS NULL OR test_weight > 0 AND test_weight <= 10000");
         });
 
         builder.HasKey(question => question.Id);
@@ -57,6 +60,9 @@ public sealed class PollQuestionConfiguration : IEntityTypeConfiguration<PollQue
                 value => value == "feedback" ? TextQuestionPurpose.Feedback :
                     value == "knowledge" ? TextQuestionPurpose.Knowledge : null)
             .HasMaxLength(16);
+        builder.Property(question => question.TestWeight)
+            .HasColumnName("test_weight")
+            .HasColumnType("numeric(10,2)");
 
         builder.HasIndex(question => question.PollId);
         builder.HasIndex(question => new { question.PollId, question.Position })

@@ -6,7 +6,9 @@ public sealed record CreatePollQuestionRequest(
     bool? AllowsMultipleAnswers = null,
     string? Type = null,
     string? TextPurpose = null,
-    KnowledgeQuestionSettingsRequest? KnowledgeSettings = null);
+    KnowledgeQuestionSettingsRequest? KnowledgeSettings = null,
+    decimal? Weight = null,
+    IReadOnlyList<int>? CorrectOptionIndexes = null);
 
 public sealed record KnowledgeQuestionSettingsRequest(
     string? ExpectedAnswer,

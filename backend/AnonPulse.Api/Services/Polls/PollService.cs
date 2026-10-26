@@ -15,7 +15,11 @@ public sealed class PollService(
         CreatePollRequest request,
         CancellationToken cancellationToken = default)
     {
-        PollRequestValidation validation = Validate(request);
+        PollRequestValidation validation = Validate(
+            request,
+            PollKind.Survey,
+            fallbackTestScale: null,
+            PollResponseMode.Anonymous);
 
         if (validation.Errors.Count > 0)
         {
@@ -29,6 +33,8 @@ public sealed class PollService(
             Title = validation.Title,
             Status = PollStatus.Draft,
             ResponseMode = validation.RequestedResponseMode ?? PollResponseMode.Anonymous,
+            Kind = validation.Kind,
+            TestScale = validation.TestScale,
             CreatedAt = timeProvider.GetUtcNow().UtcDateTime
         };
 
@@ -71,14 +77,6 @@ public sealed class PollService(
         CreatePollRequest request,
         CancellationToken cancellationToken = default)
     {
-        PollRequestValidation validation = Validate(request);
-        if (validation.Errors.Count > 0)
-        {
-            return new PollUpdateResult(
-                PollUpdateOutcome.Invalid,
-                ValidationErrors: validation.Errors);
-        }
-
         await using IDbContextTransaction? transaction =
             dbContext.Database.IsRelational()
                 ? await dbContext.Database.BeginTransactionAsync(cancellationToken)
@@ -103,6 +101,19 @@ public sealed class PollService(
                 Error: "Only draft polls can be edited.");
         }
 
+        PollRequestValidation validation = Validate(
+            request,
+            poll.Kind,
+            poll.TestScale,
+            poll.ResponseMode);
+        if (validation.Errors.Count > 0)
+        {
+            await RollbackAsync(transaction, cancellationToken);
+            return new PollUpdateResult(
+                PollUpdateOutcome.Invalid,
+                ValidationErrors: validation.Errors);
+        }
+
         PollResponseMode updatedResponseMode =
             validation.RequestedResponseMode ?? poll.ResponseMode;
 
@@ -115,7 +126,10 @@ public sealed class PollService(
                     .Query()
                     .Include(question => question.Options)
                     .Include(question => question.KnowledgeSettings)
+                    .Include(question => question.CorrectOptions)
                     .LoadAsync(cancellationToken);
+                dbContext.PollQuestionCorrectOptions.RemoveRange(
+                    poll.Questions.SelectMany(question => question.CorrectOptions));
                 dbContext.PollQuestionKnowledgeSettings.RemoveRange(
                     poll.Questions.Where(question => question.KnowledgeSettings is not null)
                         .Select(question => question.KnowledgeSettings!));
@@ -130,7 +144,9 @@ public sealed class PollService(
                     .ExecuteUpdateAsync(
                         setters => setters
                             .SetProperty(item => item.Title, validation.Title)
-                            .SetProperty(item => item.ResponseMode, updatedResponseMode),
+                            .SetProperty(item => item.ResponseMode, updatedResponseMode)
+                            .SetProperty(item => item.Kind, validation.Kind)
+                            .SetProperty(item => item.TestScale, validation.TestScale),
                         cancellationToken);
                 if (updatedPolls != 1)
                 {
@@ -149,12 +165,16 @@ public sealed class PollService(
                 dbContext.PollQuestionKnowledgeSettings.RemoveRange(
                     poll.Questions.Where(question => question.KnowledgeSettings is not null)
                         .Select(question => question.KnowledgeSettings!));
+                dbContext.PollQuestionCorrectOptions.RemoveRange(
+                    poll.Questions.SelectMany(question => question.CorrectOptions));
                 dbContext.PollOptions.RemoveRange(
                     poll.Questions.SelectMany(question => question.Options));
                 dbContext.PollQuestions.RemoveRange(poll.Questions);
                 poll.Questions.Clear();
                 poll.Title = validation.Title;
                 poll.ResponseMode = updatedResponseMode;
+                poll.Kind = validation.Kind;
+                poll.TestScale = validation.TestScale;
             }
 
             ReplaceContents(poll, validation);
@@ -239,6 +259,7 @@ public sealed class PollService(
                     .Query()
                     .Include(question => question.Options)
                     .Include(question => question.KnowledgeSettings)
+                    .Include(question => question.CorrectOptions)
                     .LoadAsync(cancellationToken);
             }
         }
@@ -340,6 +361,8 @@ public sealed class PollService(
             .ThenInclude(question => question.Options)
             .Include(poll => poll.Questions)
             .ThenInclude(question => question.KnowledgeSettings)
+            .Include(poll => poll.Questions)
+            .ThenInclude(question => question.CorrectOptions)
             .AsSplitQuery();
     }
 
@@ -363,7 +386,11 @@ public sealed class PollService(
         }
     }
 
-    private static PollRequestValidation Validate(CreatePollRequest request)
+    private static PollRequestValidation Validate(
+        CreatePollRequest request,
+        PollKind fallbackKind,
+        int? fallbackTestScale,
+        PollResponseMode fallbackResponseMode)
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
         string? title = NormalizeOptionalWhitespace(request.Title);
@@ -381,6 +408,36 @@ public sealed class PollService(
             errors[nameof(request.ResponseMode)] =
                 ["ResponseMode must be 'anonymous' or 'identified'."];
         }
+        PollKind kind = request.Kind?.Trim().ToLowerInvariant() switch
+        {
+            null => fallbackKind,
+            "survey" => PollKind.Survey,
+            "test" => PollKind.Test,
+            _ => fallbackKind
+        };
+        if (request.Kind?.Trim().ToLowerInvariant() is not (null or "survey" or "test"))
+        {
+            errors[nameof(request.Kind)] = ["Kind must be 'survey' or 'test'."];
+        }
+        int? testScale = request.TestScale ?? (kind == fallbackKind ? fallbackTestScale : null);
+        PollResponseMode effectiveResponseMode = requestedResponseMode ?? fallbackResponseMode;
+        if (kind == PollKind.Test)
+        {
+            if (effectiveResponseMode != PollResponseMode.Identified)
+            {
+                errors[nameof(request.ResponseMode)] =
+                    ["A test must use responseMode 'identified'."];
+            }
+            if (testScale is not (5 or 10 or 12 or 100))
+            {
+                errors[nameof(request.TestScale)] =
+                    ["TestScale must be 5, 10, 12, or 100 for a test."];
+            }
+        }
+        else if (request.TestScale is not null)
+        {
+            errors[nameof(request.TestScale)] = ["TestScale is allowed only for a test."];
+        }
         bool usesNewFormat = request.Questions is not null;
         bool usesLegacyFormat = request.Question is not null || request.Options is not null;
 
@@ -388,7 +445,8 @@ public sealed class PollService(
         {
             errors[nameof(request.Questions)] =
                 ["Use either 'questions' or legacy 'question' and 'options', not both."];
-            return new PollRequestValidation(title, requestedResponseMode, [], errors);
+            return new PollRequestValidation(
+                title, requestedResponseMode, kind, testScale, [], errors);
         }
 
         var questions = new List<ValidatedQuestion>();
@@ -417,6 +475,9 @@ public sealed class PollService(
                     question.Type,
                     question.TextPurpose,
                     question.KnowledgeSettings,
+                    question.Weight,
+                    question.CorrectOptionIndexes,
+                    kind,
                     $"Questions[{index}]",
                     errors));
             }
@@ -430,6 +491,9 @@ public sealed class PollService(
                 type: null,
                 textPurpose: null,
                 knowledgeSettings: null,
+                weight: null,
+                correctOptionIndexes: null,
+                kind,
                 string.Empty,
                 errors));
         }
@@ -438,7 +502,9 @@ public sealed class PollService(
             errors[nameof(request.Questions)] = ["At least one question is required."];
         }
 
-        return new PollRequestValidation(title, requestedResponseMode, questions, errors);
+        return new PollRequestValidation(
+            title, requestedResponseMode, kind, kind == PollKind.Test ? testScale : null,
+            questions, errors);
     }
 
     private static ValidatedQuestion ValidateQuestion(
@@ -448,6 +514,9 @@ public sealed class PollService(
         string? type,
         string? textPurpose,
         KnowledgeQuestionSettingsRequest? knowledgeSettings,
+        decimal? weight,
+        IReadOnlyList<int>? correctOptionIndexes,
+        PollKind kind,
         string prefix,
         IDictionary<string, string[]> errors)
     {
@@ -494,6 +563,15 @@ public sealed class PollService(
             {
                 errors[settingsKey] = ["KnowledgeSettings are allowed only for knowledge questions."];
             }
+            if (weight is not null || correctOptionIndexes is not null)
+            {
+                errors[$"{prefix}.Weight"] =
+                    ["Weight and CorrectOptionIndexes are allowed only for choice questions."];
+            }
+            if (kind == PollKind.Test && resolvedPurpose != TextQuestionPurpose.Knowledge)
+            {
+                errors[purposeKey] = ["A test text question must use textPurpose 'knowledge'."];
+            }
         }
         else
         {
@@ -528,8 +606,46 @@ public sealed class PollService(
             }
         }
 
+        var correctIndexes = correctOptionIndexes?.ToArray() ?? [];
+        string correctKey = prefix.Length == 0
+            ? "CorrectOptionIndexes"
+            : $"{prefix}.CorrectOptionIndexes";
+        string weightKey = prefix.Length == 0 ? "Weight" : $"{prefix}.Weight";
+        if (kind == PollKind.Test && resolvedType != PollQuestionType.Text)
+        {
+            if (weight is null or <= 0 or > 10000)
+            {
+                errors[weightKey] = ["Weight must be greater than 0 and at most 10000."];
+            }
+            if (correctIndexes.Distinct().Count() != correctIndexes.Length)
+            {
+                errors[correctKey] = ["CorrectOptionIndexes must be unique."];
+            }
+            if (correctIndexes.Any(index => index < 0 || index >= normalizedOptions.Count))
+            {
+                errors[correctKey] = ["CorrectOptionIndexes contains an out-of-range index."];
+            }
+            if (resolvedType == PollQuestionType.SingleChoice && correctIndexes.Length != 1)
+            {
+                errors[correctKey] =
+                    ["A single_choice question requires exactly one correct option."];
+            }
+            if (resolvedType == PollQuestionType.MultipleChoice && correctIndexes.Length == 0)
+            {
+                errors[correctKey] =
+                    ["A multiple_choice question requires one or more correct options."];
+            }
+        }
+        else if (kind == PollKind.Survey &&
+                 (weight is not null || correctOptionIndexes is not null))
+        {
+            errors[weightKey] = ["Test grading settings are allowed only for a test."];
+        }
+
         return new ValidatedQuestion(
-            text, normalizedOptions, resolvedType, resolvedPurpose, validatedSettings);
+            text, normalizedOptions, resolvedType, resolvedPurpose, validatedSettings,
+            kind == PollKind.Test && resolvedType != PollQuestionType.Text ? weight : null,
+            correctIndexes);
     }
 
     private static PollQuestionType ResolveType(
@@ -606,7 +722,16 @@ public sealed class PollService(
                 : question.Options.Count >= 2 &&
                   question.Options.All(option => !string.IsNullOrWhiteSpace(option.Text)) &&
                   question.Options.Select(option => NormalizeWhitespace(option.Text))
-                      .Distinct(StringComparer.OrdinalIgnoreCase).Count() == question.Options.Count));
+                      .Distinct(StringComparer.OrdinalIgnoreCase).Count() == question.Options.Count)) &&
+               (poll.Kind != PollKind.Test ||
+                poll.ResponseMode == PollResponseMode.Identified &&
+                poll.TestScale is 5 or 10 or 12 or 100 &&
+                poll.Questions.All(question => question.Type == PollQuestionType.Text
+                    ? question.TextPurpose == TextQuestionPurpose.Knowledge
+                    : question.TestWeight > 0 &&
+                      (question.Type == PollQuestionType.SingleChoice
+                          ? question.CorrectOptions.Count == 1
+                          : question.CorrectOptions.Count > 0)));
     }
 
     private static void ReplaceContents(
@@ -626,7 +751,8 @@ public sealed class PollService(
                 Position = questionPosition,
                 Type = validatedQuestion.Type,
                 AllowsMultipleAnswers = validatedQuestion.Type == PollQuestionType.MultipleChoice,
-                TextPurpose = validatedQuestion.TextPurpose
+                TextPurpose = validatedQuestion.TextPurpose,
+                TestWeight = validatedQuestion.TestWeight
             };
 
             if (validatedQuestion.KnowledgeSettings is not null)
@@ -644,13 +770,24 @@ public sealed class PollService(
                  optionPosition < validatedQuestion.Options.Count;
                  optionPosition++)
             {
-                question.Options.Add(new PollOption
+                var option = new PollOption
                 {
                     Id = Guid.NewGuid(),
                     QuestionId = question.Id,
                     Text = validatedQuestion.Options[optionPosition],
                     Position = optionPosition
-                });
+                };
+                question.Options.Add(option);
+                if (validatedQuestion.CorrectOptionIndexes.Contains(optionPosition))
+                {
+                    question.CorrectOptions.Add(new PollQuestionCorrectOption
+                    {
+                        QuestionId = question.Id,
+                        OptionId = option.Id,
+                        Question = question,
+                        Option = option
+                    });
+                }
             }
 
             poll.Questions.Add(question);
@@ -693,7 +830,9 @@ public sealed class PollService(
                 question.KnowledgeSettings is null ? null : new KnowledgeQuestionSettingsResponse(
                     question.KnowledgeSettings.ExpectedAnswer,
                     question.KnowledgeSettings.GradingCriteria,
-                    question.KnowledgeSettings.MaxScore)))
+                    question.KnowledgeSettings.MaxScore),
+                question.TestWeight,
+                question.CorrectOptions.Select(item => item.OptionId).Order().ToArray()))
             .ToArray();
         PollQuestionResponse? legacyQuestion = questions.Length == 1 ? questions[0] : null;
 
@@ -707,7 +846,9 @@ public sealed class PollService(
             questions,
             legacyQuestion?.Text,
             legacyQuestion?.Options ?? [],
-            poll.ResponseMode.ToApiValue());
+            poll.ResponseMode.ToApiValue(),
+            poll.Kind.ToApiValue(),
+            poll.TestScale);
     }
 
     private static string ToStatusValue(PollStatus status)
@@ -729,6 +870,8 @@ public sealed class PollService(
     private sealed record PollRequestValidation(
         string? Title,
         PollResponseMode? RequestedResponseMode,
+        PollKind Kind,
+        int? TestScale,
         IReadOnlyList<ValidatedQuestion> Questions,
         IReadOnlyDictionary<string, string[]> Errors);
 
@@ -737,7 +880,9 @@ public sealed class PollService(
         IReadOnlyList<string> Options,
         PollQuestionType Type,
         TextQuestionPurpose? TextPurpose,
-        ValidatedKnowledgeSettings? KnowledgeSettings);
+        ValidatedKnowledgeSettings? KnowledgeSettings,
+        decimal? TestWeight,
+        IReadOnlyList<int> CorrectOptionIndexes);
 
     private sealed record ValidatedKnowledgeSettings(
         string ExpectedAnswer,

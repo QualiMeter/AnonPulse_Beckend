@@ -16,6 +16,10 @@ public sealed record CreatePollRequest
 
     public string? ResponseMode { get; init; }
 
+    public string? Kind { get; init; }
+
+    public int? TestScale { get; init; }
+
     public IReadOnlyList<CreatePollQuestionRequest?>? Questions { get; init; }
 
     public string? Question { get; init; }
