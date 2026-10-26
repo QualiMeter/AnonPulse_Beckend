@@ -97,8 +97,8 @@ public sealed class GroqKnowledgeGradingProvider(
                                 {
                                     temporaryId = new { type = "string" },
                                     suggestedScore = new { type = "integer", minimum = 0, maximum = input.MaxScore },
-                                    maxScore = new { type = "integer", @const = input.MaxScore },
-                                    explanation = new { type = "string", minLength = 1 },
+                                    maxScore = new { type = "integer", minimum = input.MaxScore, maximum = input.MaxScore },
+                                    explanation = new { type = "string" },
                                     correctPoints = new { type = "array", items = new { type = "string" } },
                                     missingOrIncorrectPoints = new { type = "array", items = new { type = "string" } },
                                     needsReview = new { type = "boolean" },

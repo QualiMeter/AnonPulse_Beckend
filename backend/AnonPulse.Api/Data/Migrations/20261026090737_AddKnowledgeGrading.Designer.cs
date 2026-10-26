@@ -12,7 +12,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace AnonPulse.Api.Data.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    [Migration("20261026081034_AddKnowledgeGrading")]
+    [Migration("20261026090737_AddKnowledgeGrading")]
     partial class AddKnowledgeGrading
     {
         /// <inheritdoc />
@@ -73,6 +73,117 @@ namespace AnonPulse.Api.Data.Migrations
                         .HasDatabaseName("ix_admin_audit_events_target");
 
                     b.ToTable("admin_audit_events", (string)null);
+                });
+
+            modelBuilder.Entity("AnonPulse.Api.Models.AiTokenBudgetPeriod", b =>
+                {
+                    b.Property<DateTime>("PeriodStart")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("period_start");
+
+                    b.Property<int>("ActualTokens")
+                        .HasColumnType("integer")
+                        .HasColumnName("actual_tokens");
+
+                    b.Property<int>("EstimatedConsumedTokens")
+                        .HasColumnType("integer")
+                        .HasColumnName("estimated_consumed_tokens");
+
+                    b.Property<DateTime>("PeriodEnd")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("period_end");
+
+                    b.Property<int>("ReservedTokens")
+                        .HasColumnType("integer")
+                        .HasColumnName("reserved_tokens");
+
+                    b.Property<int>("TokenLimit")
+                        .HasColumnType("integer")
+                        .HasColumnName("token_limit");
+
+                    b.HasKey("PeriodStart");
+
+                    b.ToTable("ai_token_budget_periods", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_ai_token_budget_period_counts", "reserved_tokens >= 0 AND estimated_consumed_tokens >= 0 AND actual_tokens >= 0");
+
+                            t.HasCheckConstraint("ck_ai_token_budget_period_dates", "period_end > period_start");
+
+                            t.HasCheckConstraint("ck_ai_token_budget_period_limit", "token_limit > 0");
+                        });
+                });
+
+            modelBuilder.Entity("AnonPulse.Api.Models.AiTokenBudgetReservation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int?>("ActualCompletionTokens")
+                        .HasColumnType("integer")
+                        .HasColumnName("actual_completion_tokens");
+
+                    b.Property<int?>("ActualPromptTokens")
+                        .HasColumnType("integer")
+                        .HasColumnName("actual_prompt_tokens");
+
+                    b.Property<int>("AttemptNumber")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempt_number");
+
+                    b.Property<int>("ChargedTokens")
+                        .HasColumnType("integer")
+                        .HasColumnName("charged_tokens");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTime>("PeriodStart")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("period_start");
+
+                    b.Property<int>("ReservedTokens")
+                        .HasColumnType("integer")
+                        .HasColumnName("reserved_tokens");
+
+                    b.Property<DateTime?>("SettledAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("settled_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("status");
+
+                    b.Property<Guid>("WorkloadId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("workload_id");
+
+                    b.Property<string>("WorkloadType")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("workload_type");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PeriodStart");
+
+                    b.HasIndex("WorkloadType", "WorkloadId", "AttemptNumber")
+                        .IsUnique()
+                        .HasDatabaseName("ux_ai_token_budget_workload_attempt");
+
+                    b.ToTable("ai_token_budget_reservations", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_ai_token_budget_reservation_attempt", "attempt_number > 0");
+
+                            t.HasCheckConstraint("ck_ai_token_budget_reservation_counts", "reserved_tokens > 0 AND charged_tokens >= 0");
+
+                            t.HasCheckConstraint("ck_ai_token_budget_reservation_status", "status IN ('reserved', 'settled', 'released')");
+                        });
                 });
 
             modelBuilder.Entity("AnonPulse.Api.Models.ApplicationUser", b =>
@@ -496,6 +607,14 @@ namespace AnonPulse.Api.Data.Migrations
                         .HasColumnType("character varying(64)")
                         .HasColumnName("error_code");
 
+                    b.Property<int>("LeaseGeneration")
+                        .HasColumnType("integer")
+                        .HasColumnName("lease_generation");
+
+                    b.Property<Guid?>("LeaseId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("lease_id");
+
                     b.Property<string>("Model")
                         .IsRequired()
                         .HasMaxLength(128)
@@ -581,9 +700,9 @@ namespace AnonPulse.Api.Data.Migrations
                         .HasColumnType("jsonb")
                         .HasColumnName("answers_snapshot");
 
-                    b.Property<int>("Attempts")
+                    b.Property<int>("AutomaticAttempts")
                         .HasColumnType("integer")
-                        .HasColumnName("attempts");
+                        .HasColumnName("automatic_attempts");
 
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("timestamp with time zone")
@@ -612,6 +731,18 @@ namespace AnonPulse.Api.Data.Migrations
                         .HasColumnType("text")
                         .HasColumnName("grading_criteria_snapshot");
 
+                    b.Property<int>("LeaseGeneration")
+                        .HasColumnType("integer")
+                        .HasColumnName("lease_generation");
+
+                    b.Property<Guid?>("LeaseId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("lease_id");
+
+                    b.Property<int>("ManualRetryNumber")
+                        .HasColumnType("integer")
+                        .HasColumnName("manual_retry_number");
+
                     b.Property<int>("MaxScoreSnapshot")
                         .HasColumnType("integer")
                         .HasColumnName("max_score_snapshot");
@@ -629,6 +760,10 @@ namespace AnonPulse.Api.Data.Migrations
                     b.Property<Guid>("PollId")
                         .HasColumnType("uuid")
                         .HasColumnName("poll_id");
+
+                    b.Property<Guid?>("PreviousJobId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("previous_job_id");
 
                     b.Property<int?>("PromptTokens")
                         .HasColumnType("integer")
@@ -676,7 +811,7 @@ namespace AnonPulse.Api.Data.Migrations
 
                     b.HasIndex("PollId");
 
-                    b.HasIndex("QuestionId", "SnapshotFingerprint")
+                    b.HasIndex("QuestionId", "SnapshotFingerprint", "ManualRetryNumber")
                         .IsUnique()
                         .HasDatabaseName("ux_knowledge_grading_question_fingerprint");
 
@@ -685,7 +820,7 @@ namespace AnonPulse.Api.Data.Migrations
 
                     b.ToTable("poll_knowledge_grading_jobs", null, t =>
                         {
-                            t.HasCheckConstraint("ck_knowledge_grading_jobs_attempts", "attempts >= 0");
+                            t.HasCheckConstraint("ck_knowledge_grading_jobs_attempts", "automatic_attempts >= 0 AND manual_retry_number >= 0 AND lease_generation >= 0");
 
                             t.HasCheckConstraint("ck_knowledge_grading_jobs_budget", "reserved_input_tokens > 0 AND reserved_output_tokens > 0");
 
@@ -1163,6 +1298,17 @@ namespace AnonPulse.Api.Data.Migrations
                     b.ToTable("user_tokens", (string)null);
                 });
 
+            modelBuilder.Entity("AnonPulse.Api.Models.AiTokenBudgetReservation", b =>
+                {
+                    b.HasOne("AnonPulse.Api.Models.AiTokenBudgetPeriod", "Period")
+                        .WithMany("Reservations")
+                        .HasForeignKey("PeriodStart")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Period");
+                });
+
             modelBuilder.Entity("AnonPulse.Api.Models.Decision", b =>
                 {
                     b.HasOne("AnonPulse.Api.Models.ApplicationUser", "Author")
@@ -1462,6 +1608,11 @@ namespace AnonPulse.Api.Data.Migrations
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("AnonPulse.Api.Models.AiTokenBudgetPeriod", b =>
+                {
+                    b.Navigation("Reservations");
                 });
 
             modelBuilder.Entity("AnonPulse.Api.Models.ApplicationUser", b =>

@@ -115,6 +115,7 @@ builder.Services.AddScoped<IFeedbackAnalysisService, FeedbackAnalysisService>();
 builder.Services.AddScoped<IFeedbackAnalysisJobProcessor, FeedbackAnalysisJobProcessor>();
 builder.Services.AddScoped<IFeedbackAnalysisJobQueue, FeedbackAnalysisJobQueue>();
 builder.Services.AddScoped<IFeedbackAnalysisProvider, GroqFeedbackAnalysisProvider>();
+builder.Services.AddScoped<IAiTokenBudgetManager, AiTokenBudgetManager>();
 builder.Services.AddSingleton<IPersonalDataSanitizer, PersonalDataSanitizer>();
 builder.Services.AddHostedService<FeedbackAnalysisWorker>();
 builder.Services.AddScoped<IKnowledgeGradingService, KnowledgeGradingService>();
@@ -140,6 +141,12 @@ builder.Services.AddOptions<AiOptions>()
                          options.KnowledgeMaxReservedTokens >=
                          options.KnowledgeMaxInputTokens + options.KnowledgeMaxOutputTokens,
         "Knowledge-grading limits must be positive and fit the reserved token budget.")
+    .Validate(options => options.SharedTokenBudget > 0 &&
+                         options.SharedTokenBudgetPeriodMinutes is >= 1 and <= 10_080,
+        "Shared AI token budget and period must be positive and bounded.")
+    .Validate(options => options.KnowledgeMaxManualRetries is >= 0 and <= 20 &&
+                         options.KnowledgeManualRetryCooldownSeconds is >= 1 and <= 604_800,
+        "Knowledge-grading manual retry limits are invalid.")
     .Validate(options => options.ReasoningEffort is "low" or "medium" or "high",
         "GPT-OSS reasoning effort must be low, medium, or high.")
     .Validate(options => options.KnowledgeGradingModel == "openai/gpt-oss-20b",

@@ -108,7 +108,8 @@ public sealed class FeedbackAnalysisMigrationTests : IAsyncLifetime
             var quotaProvider = new CountingProvider(_ => throw new FeedbackProviderException(
                 "free_quota_exhausted", true, TimeSpan.FromMinutes(2)));
             var quotaProcessor = new FeedbackAnalysisJobProcessor(verify, quotaProvider,
-                new PersonalDataSanitizer(), settings, time,
+                new PersonalDataSanitizer(),
+                new AiTokenBudgetManager(verify, settings, time), settings, time,
                 NullLogger<FeedbackAnalysisJobProcessor>.Instance);
             await quotaProcessor.ProcessAsync(analysisId, default);
 
@@ -149,7 +150,8 @@ public sealed class FeedbackAnalysisMigrationTests : IAsyncLifetime
                         [input.Answers[0].TemporaryId])], [], []), 10, 20)));
             await using var processorDb = new ApplicationDbContext(options);
             var successProcessor = new FeedbackAnalysisJobProcessor(processorDb, successProvider,
-                new PersonalDataSanitizer(), settings, time,
+                new PersonalDataSanitizer(),
+                new AiTokenBudgetManager(processorDb, settings, time), settings, time,
                 NullLogger<FeedbackAnalysisJobProcessor>.Instance);
             await successProcessor.ProcessAsync(analysisId, default);
             Assert.Equal(1, successProvider.Calls);

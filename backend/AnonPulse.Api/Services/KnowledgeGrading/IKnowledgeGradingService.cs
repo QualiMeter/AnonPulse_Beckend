@@ -9,8 +9,13 @@ public interface IKnowledgeGradingService
         CancellationToken cancellationToken);
     Task<KnowledgeGradingServiceResult> GetAsync(Guid actorId, bool isAdmin,
         Guid pollId, Guid questionId, CancellationToken cancellationToken);
+    Task<KnowledgeGradingServiceResult> GetAsync(Guid actorId, bool isAdmin,
+        Guid pollId, Guid questionId, Guid jobId, CancellationToken cancellationToken);
     Task<KnowledgeGradingServiceResult> GetResultsAsync(Guid actorId, bool isAdmin,
         Guid pollId, Guid questionId, int page, int pageSize,
+        CancellationToken cancellationToken);
+    Task<KnowledgeGradingServiceResult> GetResultsAsync(Guid actorId, bool isAdmin,
+        Guid pollId, Guid questionId, Guid jobId, int page, int pageSize,
         CancellationToken cancellationToken);
 }
 

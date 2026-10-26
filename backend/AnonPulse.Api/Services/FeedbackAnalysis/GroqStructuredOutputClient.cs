@@ -29,30 +29,14 @@ internal static class GroqStructuredOutputClient
         request.Content = new StringContent(JsonSerializer.Serialize(payload, JsonOptions),
             Encoding.UTF8, "application/json");
 
-        HttpResponseMessage response;
         SemaphoreSlim gate = Gates.GetOrAdd(settings.MaxConcurrentJobs,
             limit => new SemaphoreSlim(limit, limit));
         await gate.WaitAsync(cancellationToken);
         try
         {
-            response = await factory.CreateClient("groq-ai")
+            using HttpResponseMessage response = await factory.CreateClient("groq-ai")
                 .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
-        }
-        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
-        {
-            throw new FeedbackProviderException("provider_timeout", true, null, exception);
-        }
-        catch (HttpRequestException exception)
-        {
-            throw new FeedbackProviderException("provider_unavailable", true, null, exception);
-        }
-        finally
-        {
-            gate.Release();
-        }
 
-        using (response)
-        {
             if (response.StatusCode == HttpStatusCode.TooManyRequests)
             {
                 TimeSpan? retryAfter = response.Headers.RetryAfter?.Delta;
@@ -86,6 +70,18 @@ internal static class GroqStructuredOutputClient
             {
                 throw new FeedbackProviderException("invalid_provider_response", false, null, exception);
             }
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new FeedbackProviderException("provider_timeout", true, null, exception);
+        }
+        catch (HttpRequestException exception)
+        {
+            throw new FeedbackProviderException("provider_unavailable", true, null, exception);
+        }
+        finally
+        {
+            gate.Release();
         }
     }
 

@@ -33,6 +33,11 @@ public class ApplicationDbContext
     public DbSet<PollKnowledgeGradingSuggestion> PollKnowledgeGradingSuggestions =>
         Set<PollKnowledgeGradingSuggestion>();
 
+    public DbSet<AiTokenBudgetPeriod> AiTokenBudgetPeriods => Set<AiTokenBudgetPeriod>();
+
+    public DbSet<AiTokenBudgetReservation> AiTokenBudgetReservations =>
+        Set<AiTokenBudgetReservation>();
+
     public DbSet<PollQuestionKnowledgeSettings> PollQuestionKnowledgeSettings =>
         Set<PollQuestionKnowledgeSettings>();
 

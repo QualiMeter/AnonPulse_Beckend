@@ -35,6 +35,8 @@ public sealed class FeedbackAnalysisJobQueue(
             item.Status = FeedbackAnalysisStatus.Processing;
             item.StartedAt = now;
             item.Attempts++;
+            item.LeaseId = Guid.NewGuid();
+            item.LeaseGeneration++;
             await dbContext.SaveChangesAsync(cancellationToken);
             return item.Id;
         }
@@ -44,16 +46,18 @@ public sealed class FeedbackAnalysisJobQueue(
             SET status = CASE WHEN attempts < {maximumAttempts} THEN 'pending' ELSE 'failed' END,
                 next_attempt_at = CASE WHEN attempts < {maximumAttempts} THEN {now} ELSE NULL END,
                 completed_at = CASE WHEN attempts < {maximumAttempts} THEN NULL ELSE {now} END,
-                error_code = 'worker_interrupted'
+                error_code = 'worker_interrupted', lease_id = NULL
             WHERE status = 'processing' AND started_at < {staleBefore}
             """, cancellationToken);
 
         DbConnection connection = dbContext.Database.GetDbConnection();
         if (connection.State != ConnectionState.Open) await connection.OpenAsync(cancellationToken);
         await using DbCommand command = connection.CreateCommand();
+        Guid leaseId = Guid.NewGuid();
         command.CommandText = """
             UPDATE poll_feedback_analyses
-            SET status = 'processing', started_at = @now, attempts = attempts + 1
+            SET status = 'processing', started_at = @now, attempts = attempts + 1,
+                lease_id = @lease_id, lease_generation = lease_generation + 1
             WHERE id = (
                 SELECT id FROM poll_feedback_analyses
                 WHERE status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= @now)
@@ -67,6 +71,10 @@ public sealed class FeedbackAnalysisJobQueue(
         parameter.ParameterName = "now";
         parameter.Value = now;
         command.Parameters.Add(parameter);
+        DbParameter leaseParameter = command.CreateParameter();
+        leaseParameter.ParameterName = "lease_id";
+        leaseParameter.Value = leaseId;
+        command.Parameters.Add(leaseParameter);
         object? result = await command.ExecuteScalarAsync(cancellationToken);
         return result is Guid id ? id : null;
     }

@@ -14,7 +14,10 @@ public sealed record KnowledgeGradingJobResponse(
     DateTime? CompletedAt,
     string? ErrorCode,
     string Model,
-    string AlgorithmVersion);
+    string AlgorithmVersion,
+    int AutomaticAttempts,
+    int ManualRetryNumber,
+    Guid? PreviousJobId);
 
 public sealed record KnowledgeGradingResultsResponse(
     Guid JobId,

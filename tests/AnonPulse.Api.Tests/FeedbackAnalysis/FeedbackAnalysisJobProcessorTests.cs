@@ -149,9 +149,19 @@ public sealed class FeedbackAnalysisJobProcessorTests
             [new("Действие", "Описание", "medium")], ["Возможна неточность."]), 1, 1));
 
     private static FeedbackAnalysisJobProcessor CreateProcessor(ApplicationDbContext db,
-        IFeedbackAnalysisProvider provider) => new(db, provider, new PersonalDataSanitizer(),
-        Options.Create(new AiOptions { Enabled = true, MaxRetries = 2, TimeoutSeconds = 2 }),
-        TimeProvider.System, NullLogger<FeedbackAnalysisJobProcessor>.Instance);
+        IFeedbackAnalysisProvider provider)
+    {
+        var settings = Options.Create(new AiOptions
+        {
+            Enabled = true,
+            MaxRetries = 2,
+            TimeoutSeconds = 2,
+            SharedTokenBudget = 100_000
+        });
+        return new(db, provider, new PersonalDataSanitizer(),
+            new AiTokenBudgetManager(db, settings, TimeProvider.System), settings,
+            TimeProvider.System, NullLogger<FeedbackAnalysisJobProcessor>.Instance);
+    }
 
     private static ApplicationDbContext CreateDb() => new(
         new DbContextOptionsBuilder<ApplicationDbContext>()

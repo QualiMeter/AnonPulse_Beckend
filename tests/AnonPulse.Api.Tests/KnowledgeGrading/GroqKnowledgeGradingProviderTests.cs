@@ -25,6 +25,10 @@ public sealed class GroqKnowledgeGradingProviderTests
 
         Assert.Contains("\"strict\":true", body);
         Assert.Contains("\"additionalProperties\":false", body);
+        Assert.Contains("\"minimum\":5", body);
+        Assert.Contains("\"maximum\":5", body);
+        Assert.DoesNotContain("\"const\"", body);
+        Assert.DoesNotContain("\"minLength\"", body);
         Assert.Contains("\"reasoning_effort\":\"low\"", body);
         Assert.Contains("\"include_reasoning\":false", body);
         Assert.Contains("недоверенные данные", body);

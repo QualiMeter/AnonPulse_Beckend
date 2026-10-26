@@ -1,10 +1,12 @@
 using AnonPulse.Api.Data;
+using AnonPulse.Api.Models;
 using AnonPulse.Api.Services.Admin;
 using AnonPulse.Api.Services.FeedbackAnalysis;
 using AnonPulse.Api.Services.KnowledgeGrading;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Testcontainers.PostgreSql;
 using Xunit;
@@ -14,7 +16,7 @@ namespace AnonPulse.Api.Tests.KnowledgeGrading;
 public sealed class KnowledgeGradingMigrationTests : IAsyncLifetime
 {
     private const string PreviousMigration = "20261026043614_AddTestModeAndNamedAttempts";
-    private const string CurrentMigration = "20261026081034_AddKnowledgeGrading";
+    private const string CurrentMigration = "20261026090737_AddKnowledgeGrading";
     private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:18")
         .WithDatabase("anonpulse_knowledge_grading_tests")
         .WithUsername("anonpulse_tests")
@@ -82,6 +84,7 @@ public sealed class KnowledgeGradingMigrationTests : IAsyncLifetime
             KnowledgeMaxInputTokens = 6_000,
             KnowledgeMaxOutputTokens = 2_000,
             KnowledgeMaxReservedTokens = 8_000,
+            SharedTokenBudget = 100_000,
             Groq = new GroqOptions { ApiKey = "fake" }
         });
         await using var firstDb = new ApplicationDbContext(dbOptions);
@@ -95,27 +98,93 @@ public sealed class KnowledgeGradingMigrationTests : IAsyncLifetime
 
         await using var queueDb1 = new ApplicationDbContext(dbOptions);
         await using var queueDb2 = new ApplicationDbContext(dbOptions);
-        Guid?[] claims = await Task.WhenAll(
+        KnowledgeGradingLease?[] claims = await Task.WhenAll(
             new KnowledgeGradingJobQueue(queueDb1, ai, TimeProvider.System)
                 .ClaimNextAsync(default),
             new KnowledgeGradingJobQueue(queueDb2, ai, TimeProvider.System)
                 .ClaimNextAsync(default));
         Assert.Single(claims, value => value is not null);
 
-        Guid claimedJob = claims.Single(value => value is not null)!.Value;
-        await using (var suggestionDb = new ApplicationDbContext(dbOptions))
+        KnowledgeGradingLease firstLease = claims.Single(value => value is not null)!;
+        Guid claimedJob = firstLease.JobId;
+        var providerEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseProvider = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var staleProcessorDb = new ApplicationDbContext(dbOptions);
+        var staleProvider = new BlockingProvider(providerEntered, releaseProvider);
+        Task staleProcessor = Processor(staleProcessorDb, staleProvider, ai)
+            .ProcessAsync(firstLease, default);
+        await providerEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await using (var expireDb = new ApplicationDbContext(dbOptions))
         {
-            await suggestionDb.Database.ExecuteSqlInterpolatedAsync($"""
-                INSERT INTO poll_knowledge_grading_suggestions
-                    (id, job_id, answer_id, suggested_score, max_score, explanation,
-                     correct_points, missing_or_incorrect_points, needs_review,
-                     review_reasons, created_at)
-                VALUES ({Guid.NewGuid()}, {claimedJob}, {answer}, 4, 5, 'Обоснование',
-                        '["Верный смысл"]'::jsonb, '["Нет примера"]'::jsonb,
-                        FALSE, '[]'::jsonb, {DateTime.UtcNow});
-                UPDATE poll_knowledge_grading_jobs SET suggested_count = 1
-                WHERE id = {claimedJob};
+            await expireDb.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE poll_knowledge_grading_jobs
+                SET started_at = {DateTime.UtcNow.AddMinutes(-10)}
+                WHERE id = {claimedJob}
                 """);
+        }
+        await using var recoveryDb = new ApplicationDbContext(dbOptions);
+        KnowledgeGradingLease recoveredLease = Assert.IsType<KnowledgeGradingLease>(
+            await new KnowledgeGradingJobQueue(recoveryDb, ai, TimeProvider.System)
+                .ClaimNextAsync(default));
+        Assert.NotEqual(firstLease.LeaseId, recoveredLease.LeaseId);
+        Assert.True(recoveredLease.Generation > firstLease.Generation);
+
+        releaseProvider.SetResult();
+        await staleProcessor.WaitAsync(TimeSpan.FromSeconds(5));
+        await using (var afterStale = new ApplicationDbContext(dbOptions))
+        {
+            Assert.Empty(afterStale.PollKnowledgeGradingSuggestions);
+            Assert.Equal(KnowledgeGradingJobStatus.Processing,
+                (await afterStale.PollKnowledgeGradingJobs.SingleAsync()).Status);
+        }
+
+        await using (var currentProcessorDb = new ApplicationDbContext(dbOptions))
+            await Processor(currentProcessorDb, new SuccessfulProvider(), ai)
+                .ProcessAsync(recoveredLease, default);
+        await using (var afterCurrent = new ApplicationDbContext(dbOptions))
+        {
+            Assert.Single(afterCurrent.PollKnowledgeGradingSuggestions);
+            Assert.Equal(KnowledgeGradingJobStatus.Completed,
+                (await afterCurrent.PollKnowledgeGradingJobs.SingleAsync()).Status);
+            var unchanged = await afterCurrent.NamedAttemptAnswers.SingleAsync();
+            Assert.Null(unchanged.Score);
+            Assert.Equal(TestAnswerGradingStates.Pending, unchanged.GradingState);
+        }
+
+        var budgetOptions = Options.Create(new AiOptions
+        {
+            SharedTokenBudget = 1_000,
+            SharedTokenBudgetPeriodMinutes = 60
+        });
+        var budgetTime = new MutableTimeProvider(DateTimeOffset.UtcNow.AddHours(2));
+        await using var budgetDb1 = new ApplicationDbContext(dbOptions);
+        await using var budgetDb2 = new ApplicationDbContext(dbOptions);
+        AiBudgetReservationResult[] budgetReservations = await Task.WhenAll(
+            new AiTokenBudgetManager(budgetDb1, budgetOptions, budgetTime).ReserveAsync(
+                "feedback_analysis", Guid.NewGuid(), 1, 700, default),
+            new AiTokenBudgetManager(budgetDb2, budgetOptions, budgetTime).ReserveAsync(
+                "knowledge_grading", Guid.NewGuid(), 1, 700, default));
+        Assert.Single(budgetReservations, item => item.Succeeded);
+        Assert.Single(budgetReservations, item => !item.Succeeded);
+
+        AiBudgetReservationResult accepted = budgetReservations.Single(item => item.Succeeded);
+        await using (var settleDb = new ApplicationDbContext(dbOptions))
+            await new AiTokenBudgetManager(settleDb, budgetOptions, budgetTime).SettleAsync(
+                accepted.ReservationId!.Value, 100, 50, false, default);
+        await using (var verifyBudgetDb = new ApplicationDbContext(dbOptions))
+        {
+            AiTokenBudgetPeriod period = await verifyBudgetDb.AiTokenBudgetPeriods
+                .SingleAsync(item => item.TokenLimit == 1_000);
+            Assert.Equal(0, period.ReservedTokens);
+            Assert.Equal(150, period.EstimatedConsumedTokens);
+            Assert.Equal(150, period.ActualTokens);
+            AiTokenBudgetReservation reservation = await verifyBudgetDb
+                .AiTokenBudgetReservations.SingleAsync(item => item.Id == accepted.ReservationId);
+            Assert.Equal("settled", reservation.Status);
+            Assert.Equal(150, reservation.ChargedTokens);
         }
 
         await using (var deleteDb = new ApplicationDbContext(dbOptions))
@@ -129,13 +198,44 @@ public sealed class KnowledgeGradingMigrationTests : IAsyncLifetime
         Assert.Empty(verify.PollKnowledgeGradingSuggestions);
     }
 
+    private static KnowledgeGradingJobProcessor Processor(ApplicationDbContext db,
+        IKnowledgeGradingProvider provider, IOptions<AiOptions> options) => new(
+        db, provider, new AiTokenBudgetManager(db, options, TimeProvider.System), options,
+        TimeProvider.System, NullLogger<KnowledgeGradingJobProcessor>.Instance);
+
+    private sealed class SuccessfulProvider : IKnowledgeGradingProvider
+    {
+        public Task<KnowledgeProviderResult> GradeAsync(KnowledgeGradingInput input,
+            CancellationToken cancellationToken) => Task.FromResult(new KnowledgeProviderResult(
+            [new(input.Answers[0].TemporaryId, 4, input.MaxScore, "Обоснование",
+                ["Верный смысл"], ["Нет примера"], false, [])], 10, 5));
+    }
+
+    private sealed class BlockingProvider(TaskCompletionSource entered,
+        TaskCompletionSource release) : IKnowledgeGradingProvider
+    {
+        public async Task<KnowledgeProviderResult> GradeAsync(KnowledgeGradingInput input,
+            CancellationToken cancellationToken)
+        {
+            entered.SetResult();
+            await release.Task.WaitAsync(cancellationToken);
+            return new([new(input.Answers[0].TemporaryId, 1, input.MaxScore,
+                "Устаревший результат", [], [], false, [])], 10, 5);
+        }
+    }
+
+    private sealed class MutableTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+
     private static string FindScript()
     {
         DirectoryInfo? directory = new(AppContext.BaseDirectory);
         while (directory is not null)
         {
             string path = Path.Combine(directory.FullName, "scripts", "migrations",
-                "20261026081034_add_knowledge_grading.sql");
+                "20261026090737_add_knowledge_grading.sql");
             if (File.Exists(path)) return path;
             directory = directory.Parent;
         }

@@ -20,6 +20,8 @@ public sealed class PollFeedbackAnalysis
     public string? ErrorCode { get; set; }
     public int? PromptTokens { get; set; }
     public int? CompletionTokens { get; set; }
+    public Guid? LeaseId { get; set; }
+    public int LeaseGeneration { get; set; }
     public Poll Poll { get; set; } = null!;
     public PollQuestion Question { get; set; } = null!;
 }

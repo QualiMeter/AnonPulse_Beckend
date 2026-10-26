@@ -52,13 +52,14 @@ public sealed class KnowledgeGradingService(
         string fingerprint = CreateFingerprint(question, settings, answers,
             _options.KnowledgeGradingModel, AlgorithmVersion);
         PollKnowledgeGradingJob? existing = await dbContext.PollKnowledgeGradingJobs
-            .SingleOrDefaultAsync(item => item.QuestionId == questionId &&
-                                          item.SnapshotFingerprint == fingerprint,
-                cancellationToken);
+            .Where(item => item.QuestionId == questionId &&
+                           item.SnapshotFingerprint == fingerprint)
+            .OrderByDescending(item => item.ManualRetryNumber)
+            .FirstOrDefaultAsync(cancellationToken);
         if (existing is not null && existing.Status != KnowledgeGradingJobStatus.Failed)
             return Success(existing);
         if (existing is not null)
-            return await RestartFailedAsync(existing, cancellationToken);
+            return await CreateManualRetryAsync(existing, cancellationToken);
 
         List<KnowledgeAnswerSnapshot> snapshot = answers.Select(item =>
             new KnowledgeAnswerSnapshot(item.Id, sanitizer.Sanitize(item.Text!))).ToList();
@@ -97,7 +98,8 @@ public sealed class KnowledgeGradingService(
             ReservedInputTokens = estimatedInputTokens,
             ReservedOutputTokens = _options.KnowledgeMaxOutputTokens,
             CreatedAt = now,
-            NextAttemptAt = now
+            NextAttemptAt = now,
+            ManualRetryNumber = 0
         };
         dbContext.PollKnowledgeGradingJobs.Add(job);
         try
@@ -107,9 +109,11 @@ public sealed class KnowledgeGradingService(
         catch (DbUpdateException)
         {
             dbContext.Entry(job).State = EntityState.Detached;
-            existing = await dbContext.PollKnowledgeGradingJobs.SingleAsync(item =>
-                item.QuestionId == questionId && item.SnapshotFingerprint == fingerprint,
-                cancellationToken);
+            existing = await dbContext.PollKnowledgeGradingJobs
+                .Where(item => item.QuestionId == questionId &&
+                               item.SnapshotFingerprint == fingerprint)
+                .OrderByDescending(item => item.ManualRetryNumber)
+                .FirstAsync(cancellationToken);
             return Success(existing);
         }
         return Success(job);
@@ -129,6 +133,20 @@ public sealed class KnowledgeGradingService(
             : Success(job);
     }
 
+    public async Task<KnowledgeGradingServiceResult> GetAsync(Guid actorId, bool isAdmin,
+        Guid pollId, Guid questionId, Guid jobId, CancellationToken cancellationToken)
+    {
+        KnowledgeGradingServiceResult? invalid = await AuthorizeAsync(actorId, isAdmin,
+            pollId, questionId, cancellationToken);
+        if (invalid is not null) return invalid;
+        PollKnowledgeGradingJob? job = await dbContext.PollKnowledgeGradingJobs.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.Id == jobId && item.PollId == pollId &&
+                item.QuestionId == questionId, cancellationToken);
+        return job is null
+            ? new(KnowledgeGradingOutcome.NotFound, ErrorCode: "knowledge_grading_not_found")
+            : Success(job);
+    }
+
     public async Task<KnowledgeGradingServiceResult> GetResultsAsync(Guid actorId, bool isAdmin,
         Guid pollId, Guid questionId, int page, int pageSize,
         CancellationToken cancellationToken)
@@ -139,6 +157,26 @@ public sealed class KnowledgeGradingService(
         PollKnowledgeGradingJob? job = await dbContext.PollKnowledgeGradingJobs.AsNoTracking()
             .Where(item => item.PollId == pollId && item.QuestionId == questionId)
             .OrderByDescending(item => item.CreatedAt).FirstOrDefaultAsync(cancellationToken);
+        return await BuildResultsAsync(job, page, pageSize, cancellationToken);
+    }
+
+    public async Task<KnowledgeGradingServiceResult> GetResultsAsync(Guid actorId, bool isAdmin,
+        Guid pollId, Guid questionId, Guid jobId, int page, int pageSize,
+        CancellationToken cancellationToken)
+    {
+        KnowledgeGradingServiceResult? invalid = await AuthorizeAsync(actorId, isAdmin,
+            pollId, questionId, cancellationToken);
+        if (invalid is not null) return invalid;
+        PollKnowledgeGradingJob? job = await dbContext.PollKnowledgeGradingJobs.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.Id == jobId && item.PollId == pollId &&
+                item.QuestionId == questionId, cancellationToken);
+        return await BuildResultsAsync(job, page, pageSize, cancellationToken);
+    }
+
+    private async Task<KnowledgeGradingServiceResult> BuildResultsAsync(
+        PollKnowledgeGradingJob? job, int page, int pageSize,
+        CancellationToken cancellationToken)
+    {
         if (job is null) return new(KnowledgeGradingOutcome.NotFound,
             ErrorCode: "knowledge_grading_not_found");
         if (job.Status != KnowledgeGradingJobStatus.Completed)
@@ -197,7 +235,7 @@ public sealed class KnowledgeGradingService(
         return null;
     }
 
-    private async Task<KnowledgeGradingServiceResult> RestartFailedAsync(
+    private async Task<KnowledgeGradingServiceResult> CreateManualRetryAsync(
         PollKnowledgeGradingJob job, CancellationToken cancellationToken)
     {
         DateTime now = timeProvider.GetUtcNow().UtcDateTime;
@@ -206,18 +244,46 @@ public sealed class KnowledgeGradingService(
                 ErrorCode: "knowledge_grading_retry_cooldown",
                 Error: "Knowledge grading cannot be restarted yet.",
                 RetryAfterSeconds: Math.Max(1, (int)Math.Ceiling((retryAt - now).TotalSeconds)));
-        job.Status = KnowledgeGradingJobStatus.Pending;
-        job.StartedAt = null; job.CompletedAt = null; job.NextAttemptAt = now;
-        job.Attempts = 0; job.ErrorCode = null; job.PromptTokens = null;
-        job.CompletionTokens = null; job.SuggestedCount = 0;
-        if (dbContext.Database.IsRelational())
-            await dbContext.PollKnowledgeGradingSuggestions.Where(item => item.JobId == job.Id)
-                .ExecuteDeleteAsync(cancellationToken);
-        else
-            dbContext.PollKnowledgeGradingSuggestions.RemoveRange(
-                dbContext.PollKnowledgeGradingSuggestions.Where(item => item.JobId == job.Id));
-        await dbContext.SaveChangesAsync(cancellationToken);
-        return Success(job);
+        if (job.ManualRetryNumber >= _options.KnowledgeMaxManualRetries)
+            return new(KnowledgeGradingOutcome.RateLimited,
+                ErrorCode: "knowledge_grading_manual_retry_limit",
+                Error: "The configured number of teacher retries has been exhausted.");
+        var retry = new PollKnowledgeGradingJob
+        {
+            Id = Guid.NewGuid(),
+            PollId = job.PollId,
+            QuestionId = job.QuestionId,
+            Provider = job.Provider,
+            Model = job.Model,
+            AlgorithmVersion = job.AlgorithmVersion,
+            SnapshotFingerprint = job.SnapshotFingerprint,
+            ExpectedAnswerSnapshot = job.ExpectedAnswerSnapshot,
+            GradingCriteriaSnapshot = job.GradingCriteriaSnapshot,
+            MaxScoreSnapshot = job.MaxScoreSnapshot,
+            AnswersSnapshotJson = job.AnswersSnapshotJson,
+            AnswerCount = job.AnswerCount,
+            ReservedInputTokens = job.ReservedInputTokens,
+            ReservedOutputTokens = job.ReservedOutputTokens,
+            CreatedAt = now,
+            NextAttemptAt = now,
+            ManualRetryNumber = job.ManualRetryNumber + 1,
+            PreviousJobId = job.Id
+        };
+        dbContext.PollKnowledgeGradingJobs.Add(retry);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+            return Success(retry);
+        }
+        catch (DbUpdateException)
+        {
+            dbContext.Entry(retry).State = EntityState.Detached;
+            PollKnowledgeGradingJob concurrent = await dbContext.PollKnowledgeGradingJobs
+                .SingleAsync(item => item.QuestionId == job.QuestionId &&
+                    item.SnapshotFingerprint == job.SnapshotFingerprint &&
+                    item.ManualRetryNumber == retry.ManualRetryNumber, cancellationToken);
+            return Success(concurrent);
+        }
     }
 
     internal static string CreateFingerprint(PollQuestion question,
@@ -237,7 +303,8 @@ public sealed class KnowledgeGradingService(
     internal static KnowledgeGradingJobResponse ToResponse(PollKnowledgeGradingJob job) =>
         new(job.Id, job.PollId, job.QuestionId, job.Status.ToString().ToLowerInvariant(),
             job.AnswerCount, job.SuggestedCount, job.CreatedAt, job.StartedAt,
-            job.CompletedAt, job.ErrorCode, job.Model, job.AlgorithmVersion);
+            job.CompletedAt, job.ErrorCode, job.Model, job.AlgorithmVersion,
+            job.AutomaticAttempts, job.ManualRetryNumber, job.PreviousJobId);
 
     private static KnowledgeGradingServiceResult Success(PollKnowledgeGradingJob job) =>
         new(KnowledgeGradingOutcome.Succeeded, ToResponse(job));

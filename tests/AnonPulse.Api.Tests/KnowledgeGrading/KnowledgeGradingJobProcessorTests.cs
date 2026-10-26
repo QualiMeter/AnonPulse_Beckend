@@ -22,7 +22,7 @@ public sealed class KnowledgeGradingJobProcessorTests
             [new(input.Answers[0].TemporaryId, 2, 5, "Частичный ответ", ["Есть идея"],
                 ["Нет примера"], true, ["Есть инструкция, не относящаяся к ответу"])], 100, 50)));
 
-        await Processor(db, fake).ProcessAsync(job.Id, default);
+        await Processor(db, fake).ProcessAsync(Lease(job), default);
 
         KnowledgeInputAnswer sent = Assert.Single(fake.LastInput!.Answers);
         Assert.DoesNotContain(answer.Id.ToString(), sent.TemporaryId);
@@ -65,7 +65,7 @@ public sealed class KnowledgeGradingJobProcessorTests
             return Task.FromResult(new KnowledgeProviderResult(values, null, null));
         });
 
-        await Processor(db, fake).ProcessAsync(job.Id, default);
+        await Processor(db, fake).ProcessAsync(Lease(job), default);
 
         Assert.Equal(KnowledgeGradingJobStatus.Failed, job.Status);
         Assert.Equal("invalid_provider_response", job.ErrorCode);
@@ -153,7 +153,9 @@ public sealed class KnowledgeGradingJobProcessorTests
             ReservedOutputTokens = 100,
             CreatedAt = DateTime.UtcNow,
             StartedAt = DateTime.UtcNow,
-            Attempts = 1
+            AutomaticAttempts = 1,
+            LeaseId = Guid.NewGuid(),
+            LeaseGeneration = 1
         };
         db.AddRange(poll, attempt, job);
         db.SaveChanges();
@@ -161,15 +163,23 @@ public sealed class KnowledgeGradingJobProcessorTests
     }
 
     private static KnowledgeGradingJobProcessor Processor(ApplicationDbContext db,
-        IKnowledgeGradingProvider provider) => new(db, provider,
-        Options.Create(new AiOptions
+        IKnowledgeGradingProvider provider)
+    {
+        var settings = Options.Create(new AiOptions
         {
             Enabled = true,
             KnowledgeGradingEnabled = true,
             MaxRetries = 0,
-            TimeoutSeconds = 2
-        }), TimeProvider.System,
-        NullLogger<KnowledgeGradingJobProcessor>.Instance);
+            TimeoutSeconds = 2,
+            SharedTokenBudget = 100_000
+        });
+        return new(db, provider, new AiTokenBudgetManager(db, settings, TimeProvider.System),
+            settings, TimeProvider.System,
+            NullLogger<KnowledgeGradingJobProcessor>.Instance);
+    }
+
+    private static KnowledgeGradingLease Lease(PollKnowledgeGradingJob job) =>
+        new(job.Id, job.LeaseId!.Value, job.LeaseGeneration);
 
     private static ApplicationDbContext CreateDb() => new(
         new DbContextOptionsBuilder<ApplicationDbContext>()

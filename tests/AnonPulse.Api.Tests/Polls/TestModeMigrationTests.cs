@@ -150,8 +150,18 @@ public sealed class TestModeMigrationTests : IAsyncLifetime
         Assert.Contains(participations, item => item.Id == identifiedParticipation &&
             item.PollId == identifiedPoll && item.TokenHash == identifiedTokenHash);
 
-        PollFeedbackAnalysis analysis = await verify.PollFeedbackAnalyses.AsNoTracking()
-            .SingleAsync();
+        var analysis = await verify.PollFeedbackAnalyses.AsNoTracking()
+            .Select(item => new
+            {
+                item.Id,
+                item.PollId,
+                item.QuestionId,
+                item.Status,
+                item.Provider,
+                item.ReportJson,
+                item.CompletedAt,
+                item.AnswerCount
+            }).SingleAsync();
         Assert.Equal(feedbackAnalysis, analysis.Id);
         Assert.Equal(identifiedPoll, analysis.PollId);
         Assert.Equal(identifiedTextQuestion, analysis.QuestionId);

@@ -1,4 +1,5 @@
 using AnonPulse.Api.Data;
+using AnonPulse.Api.Contracts.KnowledgeGrading;
 using AnonPulse.Api.Models;
 using AnonPulse.Api.Services.FeedbackAnalysis;
 using AnonPulse.Api.Services.KnowledgeGrading;
@@ -85,6 +86,92 @@ public sealed class KnowledgeGradingServiceTests
         Assert.Equal(KnowledgeGradingOutcome.Succeeded, result.Outcome);
     }
 
+    [Fact]
+    public async Task FailedRuns_CreateBoundedHistoryWithoutResettingPreviousJob()
+    {
+        await using ApplicationDbContext db = CreateDb();
+        (Guid owner, Poll poll, PollQuestion question, _) = Seed(db, PollStatus.Closed);
+        KnowledgeGradingService service = Service(db, true);
+        PollKnowledgeGradingJob first = (await service.StartAsync(owner, false, poll.Id,
+            question.Id, true, default)).Job is { } firstResponse
+            ? await db.PollKnowledgeGradingJobs.SingleAsync(item => item.Id == firstResponse.Id)
+            : throw new InvalidOperationException();
+        first.Status = KnowledgeGradingJobStatus.Failed;
+        first.NextAttemptAt = DateTime.UtcNow.AddSeconds(-1);
+        first.CompletedAt = DateTime.UtcNow;
+        first.AutomaticAttempts = 3;
+        await db.SaveChangesAsync();
+
+        KnowledgeGradingJobResponse second = (await service.StartAsync(owner, false, poll.Id,
+            question.Id, true, default)).Job!;
+        Assert.Equal(first.Id, second.PreviousJobId);
+        Assert.Equal(1, second.ManualRetryNumber);
+        Assert.Equal(3, first.AutomaticAttempts);
+
+        PollKnowledgeGradingJob secondEntity = await db.PollKnowledgeGradingJobs
+            .SingleAsync(item => item.Id == second.Id);
+        secondEntity.Status = KnowledgeGradingJobStatus.Failed;
+        secondEntity.NextAttemptAt = DateTime.UtcNow.AddSeconds(-1);
+        await db.SaveChangesAsync();
+        KnowledgeGradingJobResponse third = (await service.StartAsync(owner, false, poll.Id,
+            question.Id, true, default)).Job!;
+        Assert.Equal(2, third.ManualRetryNumber);
+
+        PollKnowledgeGradingJob thirdEntity = await db.PollKnowledgeGradingJobs
+            .SingleAsync(item => item.Id == third.Id);
+        thirdEntity.Status = KnowledgeGradingJobStatus.Failed;
+        thirdEntity.NextAttemptAt = DateTime.UtcNow.AddSeconds(-1);
+        await db.SaveChangesAsync();
+        KnowledgeGradingServiceResult exhausted = await service.StartAsync(owner, false,
+            poll.Id, question.Id, true, default);
+        Assert.Equal(KnowledgeGradingOutcome.RateLimited, exhausted.Outcome);
+        Assert.Equal("knowledge_grading_manual_retry_limit", exhausted.ErrorCode);
+        Assert.Equal(3, await db.PollKnowledgeGradingJobs.CountAsync());
+    }
+
+    [Fact]
+    public async Task SpecificJobHistory_RemainsAuthorizedAndAvailableAcrossVersions()
+    {
+        await using ApplicationDbContext db = CreateDb();
+        (Guid owner, Poll poll, PollQuestion question, NamedAttemptAnswer answer) =
+            Seed(db, PollStatus.Closed);
+        KnowledgeGradingService service = Service(db, true);
+        KnowledgeGradingJobResponse first = (await service.StartAsync(owner, false, poll.Id,
+            question.Id, true, default)).Job!;
+        PollKnowledgeGradingJob firstEntity = await db.PollKnowledgeGradingJobs
+            .SingleAsync(item => item.Id == first.Id);
+        firstEntity.Status = KnowledgeGradingJobStatus.Completed;
+        firstEntity.SuggestedCount = 1;
+        firstEntity.CompletedAt = DateTime.UtcNow;
+        db.PollKnowledgeGradingSuggestions.Add(new()
+        {
+            Id = Guid.NewGuid(),
+            JobId = first.Id,
+            AnswerId = answer.Id,
+            SuggestedScore = 4,
+            MaxScore = 5,
+            Explanation = "Первая версия",
+            CorrectPointsJson = "[]",
+            MissingOrIncorrectPointsJson = "[]",
+            ReviewReasonsJson = "[]",
+            CreatedAt = DateTime.UtcNow
+        });
+        question.KnowledgeSettings!.ExpectedAnswer = "Обновлённый эталон";
+        await db.SaveChangesAsync();
+
+        KnowledgeGradingJobResponse latest = (await service.StartAsync(owner, false, poll.Id,
+            question.Id, true, default)).Job!;
+        Assert.NotEqual(first.Id, latest.Id);
+        Assert.Equal(first.Id, (await service.GetAsync(owner, false, poll.Id, question.Id,
+            first.Id, default)).Job!.Id);
+        KnowledgeGradingServiceResult oldResults = await service.GetResultsAsync(owner, false,
+            poll.Id, question.Id, first.Id, 1, 20, default);
+        Assert.Equal("Первая версия", Assert.Single(oldResults.Results!.Items).Explanation);
+        Assert.Equal(KnowledgeGradingOutcome.Forbidden,
+            (await service.GetAsync(Guid.NewGuid(), false, poll.Id, question.Id,
+                first.Id, default)).Outcome);
+    }
+
     private static KnowledgeGradingService Service(ApplicationDbContext db, bool enabled) => new(
         db, new PersonalDataSanitizer(), Options.Create(new AiOptions
         {
@@ -97,6 +184,8 @@ public sealed class KnowledgeGradingServiceTests
             KnowledgeMaxInputTokens = 6_000,
             KnowledgeMaxOutputTokens = 2_000,
             KnowledgeMaxReservedTokens = 8_000,
+            KnowledgeMaxManualRetries = 2,
+            KnowledgeManualRetryCooldownSeconds = 1,
             Groq = new GroqOptions { ApiKey = "fake-test-key" }
         }), TimeProvider.System);
 

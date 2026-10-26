@@ -16,6 +16,7 @@ public sealed class FeedbackAnalysisJobProcessor(
     ApplicationDbContext dbContext,
     IFeedbackAnalysisProvider provider,
     IPersonalDataSanitizer sanitizer,
+    IAiTokenBudgetManager budget,
     IOptions<AiOptions> options,
     TimeProvider timeProvider,
     ILogger<FeedbackAnalysisJobProcessor> logger) : IFeedbackAnalysisJobProcessor
@@ -28,6 +29,7 @@ public sealed class FeedbackAnalysisJobProcessor(
         PollFeedbackAnalysis? analysis = await dbContext.PollFeedbackAnalyses
             .SingleOrDefaultAsync(item => item.Id == analysisId, cancellationToken);
         if (analysis is null || analysis.Status != FeedbackAnalysisStatus.Processing) return;
+        Guid? activeReservationId = null;
 
         try
         {
@@ -50,6 +52,17 @@ public sealed class FeedbackAnalysisJobProcessor(
                 $"answer-{index + 1:D6}-{Guid.NewGuid():N}", sanitizer.Sanitize(answer.Text))).ToList();
             var inputIds = inputs.Select(item => item.TemporaryId).ToHashSet(StringComparer.Ordinal);
 
+            int budgetAttempt = analysis.LeaseGeneration > 0
+                ? analysis.LeaseGeneration : Math.Max(1, analysis.Attempts);
+            AiBudgetReservationResult reservation = await budget.ReserveAsync(
+                "feedback_analysis", analysis.Id, budgetAttempt,
+                checked(estimatedTokens + _options.MaxOutputTokens), cancellationToken);
+            if (!reservation.Succeeded)
+                throw new FeedbackProviderException("ai_period_budget_exhausted", true,
+                    TimeSpan.FromSeconds(reservation.RetryAfterSeconds ?? 60));
+            if (reservation.AlreadyExists) return;
+            activeReservationId = reservation.ReservationId;
+
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(_options.TimeoutSeconds));
             ProviderAnalysisResult providerResult;
@@ -61,8 +74,22 @@ public sealed class FeedbackAnalysisJobProcessor(
             }
             catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
             {
+                await budget.SettleAsync(reservation.ReservationId!.Value, null, null, true,
+                    CancellationToken.None);
+                activeReservationId = null;
                 throw new FeedbackProviderException("provider_timeout", true, null, exception);
             }
+            catch
+            {
+                await budget.SettleAsync(reservation.ReservationId!.Value, null, null, true,
+                    CancellationToken.None);
+                activeReservationId = null;
+                throw;
+            }
+            await budget.SettleAsync(reservation.ReservationId!.Value,
+                providerResult.PromptTokens, providerResult.CompletionTokens, false,
+                CancellationToken.None);
+            activeReservationId = null;
 
             FeedbackReportResponse report = ValidateAndBuildReport(providerResult.Report, inputIds,
                 analysis.AnswerCount);
@@ -73,12 +100,16 @@ public sealed class FeedbackAnalysisJobProcessor(
             analysis.ErrorCode = null;
             analysis.CompletedAt = timeProvider.GetUtcNow().UtcDateTime;
             analysis.NextAttemptAt = null;
+            analysis.LeaseId = null;
             await dbContext.SaveChangesAsync(cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            if (activeReservationId is Guid held)
+                await budget.SettleAsync(held, null, null, true, CancellationToken.None);
             analysis.Status = FeedbackAnalysisStatus.Pending;
             analysis.NextAttemptAt = timeProvider.GetUtcNow().UtcDateTime;
+            analysis.LeaseId = null;
             await dbContext.SaveChangesAsync(CancellationToken.None);
             throw;
         }
@@ -107,7 +138,8 @@ public sealed class FeedbackAnalysisJobProcessor(
         {
             TimeSpan delay = retryAfter ?? TimeSpan.FromSeconds(
                 Math.Min(Math.Pow(2, analysis.Attempts) * 5, 3600));
-            if (code == "free_quota_exhausted" && delay < minimumRateLimitCooldown)
+            if ((code is "free_quota_exhausted" or "ai_period_budget_exhausted") &&
+                delay < minimumRateLimitCooldown)
                 delay = minimumRateLimitCooldown;
             if (delay < TimeSpan.Zero) delay = TimeSpan.Zero;
             analysis.Status = FeedbackAnalysisStatus.Pending;
@@ -117,7 +149,7 @@ public sealed class FeedbackAnalysisJobProcessor(
         {
             analysis.Status = FeedbackAnalysisStatus.Failed;
             analysis.CompletedAt = now;
-            if (code == "free_quota_exhausted")
+            if (code is "free_quota_exhausted" or "ai_period_budget_exhausted")
             {
                 TimeSpan cooldown = retryAfter ?? minimumRateLimitCooldown;
                 if (cooldown < minimumRateLimitCooldown) cooldown = minimumRateLimitCooldown;
@@ -129,6 +161,7 @@ public sealed class FeedbackAnalysisJobProcessor(
             }
         }
         analysis.ErrorCode = code;
+        analysis.LeaseId = null;
         await dbContext.SaveChangesAsync(cancellationToken);
     }
 

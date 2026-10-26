@@ -59,6 +59,37 @@ public sealed class KnowledgeGradingController(IKnowledgeGradingService service)
             ? Ok(result.Results) : MapError<KnowledgeGradingResultsResponse>(result);
     }
 
+    [HttpGet("jobs/{jobId:guid}")]
+    public async Task<ActionResult<KnowledgeGradingJobResponse>> GetJob(Guid pollId,
+        Guid questionId, Guid jobId, CancellationToken cancellationToken)
+    {
+        if (!TryGetActorId(out Guid actorId)) return Unauthorized();
+        KnowledgeGradingServiceResult result = await service.GetAsync(actorId,
+            User.IsInRole(RoleNames.Admin), pollId, questionId, jobId, cancellationToken);
+        return result.Outcome == KnowledgeGradingOutcome.Succeeded
+            ? Ok(result.Job) : MapError<KnowledgeGradingJobResponse>(result);
+    }
+
+    [HttpGet("jobs/{jobId:guid}/results")]
+    public async Task<ActionResult<KnowledgeGradingResultsResponse>> GetJobResults(Guid pollId,
+        Guid questionId, Guid jobId, [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 20, CancellationToken cancellationToken = default)
+    {
+        if (page < 1 || pageSize is < 1 or > 100)
+            return BadRequest(new ProblemDetails
+            {
+                Status = StatusCodes.Status400BadRequest,
+                Title = "Page must be positive and pageSize must be between 1 and 100.",
+                Extensions = { ["code"] = "invalid_pagination" }
+            });
+        if (!TryGetActorId(out Guid actorId)) return Unauthorized();
+        KnowledgeGradingServiceResult result = await service.GetResultsAsync(actorId,
+            User.IsInRole(RoleNames.Admin), pollId, questionId, jobId, page, pageSize,
+            cancellationToken);
+        return result.Outcome == KnowledgeGradingOutcome.Succeeded
+            ? Ok(result.Results) : MapError<KnowledgeGradingResultsResponse>(result);
+    }
+
     private ActionResult<T> MapError<T>(KnowledgeGradingServiceResult result)
     {
         int status = result.Outcome switch

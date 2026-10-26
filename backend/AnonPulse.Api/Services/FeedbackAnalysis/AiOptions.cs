@@ -23,6 +23,10 @@ public sealed class AiOptions
     public int KnowledgeMaxInputTokens { get; set; } = 6_000;
     public int KnowledgeMaxOutputTokens { get; set; } = 4_000;
     public int KnowledgeMaxReservedTokens { get; set; } = 10_000;
+    public int SharedTokenBudget { get; set; } = 100_000;
+    public int SharedTokenBudgetPeriodMinutes { get; set; } = 60;
+    public int KnowledgeMaxManualRetries { get; set; } = 2;
+    public int KnowledgeManualRetryCooldownSeconds { get; set; } = 300;
     public GroqOptions Groq { get; set; } = new();
 }
 

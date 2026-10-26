@@ -24,7 +24,11 @@ public sealed class PollKnowledgeGradingJob
     public DateTime? StartedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
     public DateTime? NextAttemptAt { get; set; }
-    public int Attempts { get; set; }
+    public int AutomaticAttempts { get; set; }
+    public int ManualRetryNumber { get; set; }
+    public Guid? PreviousJobId { get; set; }
+    public Guid? LeaseId { get; set; }
+    public int LeaseGeneration { get; set; }
     public string? ErrorCode { get; set; }
     public Poll Poll { get; set; } = null!;
     public PollQuestion Question { get; set; } = null!;

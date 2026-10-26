@@ -17,7 +17,8 @@ public sealed class PollKnowledgeGradingJobConfiguration
             table.HasCheckConstraint("ck_knowledge_grading_jobs_counts",
                 "answer_count > 0 AND suggested_count >= 0 AND suggested_count <= answer_count");
             table.HasCheckConstraint("ck_knowledge_grading_jobs_score", "max_score_snapshot BETWEEN 1 AND 100");
-            table.HasCheckConstraint("ck_knowledge_grading_jobs_attempts", "attempts >= 0");
+            table.HasCheckConstraint("ck_knowledge_grading_jobs_attempts",
+                "automatic_attempts >= 0 AND manual_retry_number >= 0 AND lease_generation >= 0");
             table.HasCheckConstraint("ck_knowledge_grading_jobs_budget",
                 "reserved_input_tokens > 0 AND reserved_output_tokens > 0");
         });
@@ -47,9 +48,14 @@ public sealed class PollKnowledgeGradingJobConfiguration
         builder.Property(item => item.StartedAt).HasColumnName("started_at").HasColumnType("timestamp with time zone");
         builder.Property(item => item.CompletedAt).HasColumnName("completed_at").HasColumnType("timestamp with time zone");
         builder.Property(item => item.NextAttemptAt).HasColumnName("next_attempt_at").HasColumnType("timestamp with time zone");
-        builder.Property(item => item.Attempts).HasColumnName("attempts");
+        builder.Property(item => item.AutomaticAttempts).HasColumnName("automatic_attempts");
+        builder.Property(item => item.ManualRetryNumber).HasColumnName("manual_retry_number");
+        builder.Property(item => item.PreviousJobId).HasColumnName("previous_job_id");
+        builder.Property(item => item.LeaseId).HasColumnName("lease_id");
+        builder.Property(item => item.LeaseGeneration).HasColumnName("lease_generation");
         builder.Property(item => item.ErrorCode).HasColumnName("error_code").HasMaxLength(64);
-        builder.HasIndex(item => new { item.QuestionId, item.SnapshotFingerprint })
+        builder.HasIndex(item => new
+        { item.QuestionId, item.SnapshotFingerprint, item.ManualRetryNumber })
             .IsUnique().HasDatabaseName("ux_knowledge_grading_question_fingerprint");
         builder.HasIndex(item => new { item.Status, item.NextAttemptAt, item.CreatedAt })
             .HasDatabaseName("ix_knowledge_grading_queue");

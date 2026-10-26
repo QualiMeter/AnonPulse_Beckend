@@ -83,6 +83,15 @@ public sealed class KnowledgeGradingEndpointsTests : IAsyncLifetime
         HttpResponseMessage results = await ownerClient.GetAsync(
             $"/api/polls/{pollId}/questions/{questionId}/knowledge-grading/results");
         Assert.Equal(HttpStatusCode.Conflict, results.StatusCode);
+        HttpResponseMessage specific = await ownerClient.GetAsync(
+            $"/api/polls/{pollId}/questions/{questionId}/knowledge-grading/jobs/{job.Id}");
+        Assert.Equal(HttpStatusCode.OK, specific.StatusCode);
+        HttpResponseMessage specificResults = await ownerClient.GetAsync(
+            $"/api/polls/{pollId}/questions/{questionId}/knowledge-grading/jobs/{job.Id}/results");
+        Assert.Equal(HttpStatusCode.Conflict, specificResults.StatusCode);
+        HttpResponseMessage foreignSpecific = await strangerClient.GetAsync(
+            $"/api/polls/{pollId}/questions/{questionId}/knowledge-grading/jobs/{job.Id}");
+        Assert.Equal(HttpStatusCode.Forbidden, foreignSpecific.StatusCode);
     }
 
     private async Task<(Guid PollId, Guid QuestionId)> SeedClosedTestAsync(Guid owner)

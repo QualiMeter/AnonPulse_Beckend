@@ -39,7 +39,10 @@ X-CSRF-TOKEN: ...
   "completedAt": null,
   "errorCode": null,
   "model": "openai/gpt-oss-20b",
-  "algorithmVersion": "knowledge-v1"
+  "algorithmVersion": "knowledge-v1",
+  "automaticAttempts": 0,
+  "manualRetryNumber": 0,
+  "previousJobId": null
 }
 ```
 
@@ -53,14 +56,16 @@ GET /api/polls/{pollId}/questions/{questionId}/knowledge-grading
 ```
 
 Статусы: `pending`, `processing`, `completed`, `failed`. `suggestedCount` — количество полностью
-сохранённых предложений. Безопасный `errorCode` не раскрывает prompt или тело ответа Groq.
+сохранённых предложений. `automaticAttempts` показывает число захватов job worker-ом,
+`manualRetryNumber` — номер явно запрошенного преподавателем повтора, а `previousJobId` связывает
+повтор с предыдущей версией job. Безопасный `errorCode` не раскрывает prompt или тело ответа Groq.
 
 Основные коды: `knowledge_grading_disabled`, `external_processing_consent_required`,
 `test_not_closed`, `poll_not_test`, `question_not_knowledge_text`, `no_pending_answers`,
 `knowledge_grading_limit_exceeded`, `provider_timeout`, `provider_unavailable`,
 `free_quota_exhausted`, `provider_token_limit_exceeded`, `invalid_provider_response`,
-`worker_interrupted`. Для временных ошибок есть ограниченные retries. `429` учитывает и возвращает
-`Retry-After`.
+`worker_interrupted`, `ai_period_budget_exhausted`. Для временных ошибок есть ограниченные
+автоматические retries. `429` учитывает и возвращает `Retry-After`.
 
 Пример `409 Conflict`:
 
@@ -74,6 +79,34 @@ GET /api/polls/{pollId}/questions/{questionId}/knowledge-grading
 
 При превышении лимита возвращается `413` с `knowledge_grading_limit_exceeded`. Ответы и рубрика
 не обрезаются скрыто.
+
+Повторный `POST` после окончательной ошибки создаёт новый job с тем же неизменяемым снимком и
+ссылкой `previousJobId`; прежний job и его предложения не удаляются. Повтор ограничен cooldown и
+`Ai__KnowledgeMaxManualRetries`. Во время cooldown возвращается `429` с
+`knowledge_grading_retry_cooldown`, после исчерпания лимита — `429` с
+`knowledge_grading_manual_retry_limit`. При исчерпании общего бюджета worker сохраняет
+`ai_period_budget_exhausted` и планирует только ограниченный повтор.
+
+## История заданий
+
+Маршруты без `jobId` по-прежнему возвращают последнее задание. Для сохранённой версии используйте
+UUID из ранее полученного ответа:
+
+```http
+GET /api/polls/{pollId}/questions/{questionId}/knowledge-grading/jobs/{jobId}
+GET /api/polls/{pollId}/questions/{questionId}/knowledge-grading/jobs/{jobId}/results?page=1&pageSize=20
+```
+
+Оба маршрута доступны только владельцу TEST или администратору, не кешируются и проверяют, что job
+действительно принадлежит указанным тесту и вопросу. Неизвестный UUID возвращает `404`:
+
+```json
+{
+  "status": 404,
+  "title": "Knowledge grading request was rejected.",
+  "code": "knowledge_grading_not_found"
+}
+```
 
 ## Предварительные оценки
 
@@ -117,18 +150,25 @@ GET /api/polls/{pollId}/questions/{questionId}/knowledge-grading/results?page=1&
 
 До очереди PostgreSQL сохраняет минимальный неизменяемый снимок. `FOR UPDATE SKIP LOCKED`,
 уникальный fingerprint, recovery зависших jobs, ограничение попыток и идемпотентная запись
-защищают от конкуренции и рестартов. Неизвестные/повторные temporary ID, неполный результат,
-пустое объяснение или балл вне диапазона завершают job ошибкой и не меняют ответ студента.
+защищают от конкуренции и рестартов. Каждый захват получает новый lease ID и поколение: результат
+worker-а с истёкшим lease отбрасывается, а предложения и финальный статус сохраняются одной
+транзакцией. Неизвестные/повторные temporary ID, неполный результат, пустое объяснение или балл
+вне диапазона завершают job ошибкой и не меняют ответ студента.
 
-Все ответы вопроса проверяются пакетом. Перед job резервируется консервативный input/output
-token budget с учётом prompt и JSON Schema. Общий HTTP pool ограничивает одновременные Groq
-вызовы feedback-analysis и knowledge grading.
+Все ответы вопроса проверяются пакетом. Перед каждым обращением атомарно резервируется
+консервативный input/output token budget с учётом prompt и JSON Schema. Общий периодический бюджет
+PostgreSQL учитывает и feedback-analysis, и knowledge grading, включая автоматические и ручные
+повторы. Резервация хранится отдельно от фактических `prompt_tokens`/`completion_tokens`; после
+ответа неиспользованная часть корректируется, а при неизвестном usage оценка учитывается
+консервативно. Общий HTTP concurrency gate удерживается до окончания чтения и обработки body и
+ограничивает одновременные Groq-вызовы обоих сценариев в рамках экземпляра приложения.
 
 ## Railway и включение
 
 Функция по умолчанию выключена. Безопасный порядок:
 
-1. Отдельно применить миграцию `20261026081034_AddKnowledgeGrading`.
+1. Сделать резервную копию и отдельно применить миграцию
+   `20261026090737_AddKnowledgeGrading` (или соответствующий idempotent SQL).
 2. Развернуть с `Ai__KnowledgeGradingEnabled=false`.
 3. Проверить `Ai__Enabled=true`, `Ai__Provider=Groq`, `Ai__Groq__ApiKey` и мониторинг.
 4. Информировать участников и проверить правовые основания внешней обработки.
@@ -136,7 +176,10 @@ token budget с учётом prompt и JSON Schema. Общий HTTP pool огр�
 
 Лимиты: `Ai__KnowledgeMaxAnswers`, `Ai__KnowledgeMaxTotalCharacters`,
 `Ai__KnowledgeMaxInputTokens`, `Ai__KnowledgeMaxOutputTokens`,
-`Ai__KnowledgeMaxReservedTokens`. `Ai__KnowledgeGradingModel` фиксируется как
+`Ai__KnowledgeMaxReservedTokens`, `Ai__KnowledgeMaxManualRetries`,
+`Ai__KnowledgeManualRetryCooldownSeconds`, `Ai__SharedTokenBudget` и
+`Ai__SharedTokenBudgetPeriodMinutes`. Последние два параметра задают общий лимит двух AI-сценариев
+на период. `Ai__KnowledgeGradingModel` фиксируется как
 `openai/gpt-oss-20b`; `reasoning_effort` всегда
 `low`, `include_reasoning=false`.
 
