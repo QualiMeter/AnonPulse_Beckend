@@ -13,6 +13,7 @@ public interface IAiTokenBudgetManager
     Task SettleAsync(Guid reservationId, int? promptTokens, int? completionTokens,
         bool usageUnknown, CancellationToken cancellationToken);
     Task ReleaseAsync(Guid reservationId, CancellationToken cancellationToken);
+    Task ReconcileStaleAsync(CancellationToken cancellationToken);
 }
 
 public sealed record AiBudgetReservationResult(bool Succeeded, Guid? ReservationId,
@@ -70,6 +71,7 @@ public sealed class AiTokenBudgetManager(
         await using var transaction = await dbContext.Database.BeginTransactionAsync(
             IsolationLevel.ReadCommitted, cancellationToken);
         AiTokenBudgetReservation? duplicate = await dbContext.AiTokenBudgetReservations
+            .AsNoTracking()
             .SingleOrDefaultAsync(item => item.WorkloadType == workloadType &&
                 item.WorkloadId == workloadId && item.AttemptNumber == attemptNumber,
                 cancellationToken);
@@ -85,36 +87,37 @@ public sealed class AiTokenBudgetManager(
             VALUES ({start}, {end}, {_options.SharedTokenBudget}, 0, 0, 0)
             ON CONFLICT (period_start) DO NOTHING
             """, cancellationToken);
-        AiTokenBudgetPeriod periodRow = await dbContext.AiTokenBudgetPeriods
-            .FromSqlInterpolated($"""
-                SELECT * FROM ai_token_budget_periods
-                WHERE period_start = {start}
-                FOR UPDATE
-                """).SingleAsync(cancellationToken);
-        // The period row serializes reservations. Recheck the idempotency key after taking
-        // the lock because a concurrent transaction may have committed it while we waited.
-        duplicate = await dbContext.AiTokenBudgetReservations
-            .SingleOrDefaultAsync(item => item.WorkloadType == workloadType &&
-                item.WorkloadId == workloadId && item.AttemptNumber == attemptNumber,
-                cancellationToken);
-        if (duplicate is not null)
-        {
-            await transaction.CommitAsync(cancellationToken);
-            return new(true, duplicate.Id, true);
-        }
-        if (periodRow.ReservedTokens + periodRow.EstimatedConsumedTokens + estimatedTokens >
-            periodRow.TokenLimit)
+        int updated = await dbContext.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE ai_token_budget_periods
+            SET reserved_tokens = reserved_tokens + {estimatedTokens}
+            WHERE period_start = {start}
+              AND reserved_tokens + estimated_consumed_tokens + {estimatedTokens} <= token_limit
+            """, cancellationToken);
+        if (updated == 0)
         {
             await transaction.RollbackAsync(cancellationToken);
             return Exhausted(now, end);
         }
-        periodRow.ReservedTokens += estimatedTokens;
         var created = NewReservation(workloadType, workloadId, attemptNumber, estimatedTokens,
             start, now);
         dbContext.AiTokenBudgetReservations.Add(created);
-        await dbContext.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-        return new(true, created.Id, false);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return new(true, created.Id, false);
+        }
+        catch (DbUpdateException)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            dbContext.Entry(created).State = EntityState.Detached;
+            duplicate = await dbContext.AiTokenBudgetReservations.AsNoTracking()
+                .SingleOrDefaultAsync(item => item.WorkloadType == workloadType &&
+                    item.WorkloadId == workloadId && item.AttemptNumber == attemptNumber,
+                    cancellationToken);
+            if (duplicate is not null) return new(true, duplicate.Id, true);
+            throw;
+        }
     }
 
     public Task SettleAsync(Guid reservationId, int? promptTokens, int? completionTokens,
@@ -124,6 +127,66 @@ public sealed class AiTokenBudgetManager(
     public Task ReleaseAsync(Guid reservationId, CancellationToken cancellationToken) =>
         UpdateAsync(reservationId, release: true, null, null, false, cancellationToken);
 
+    public async Task ReconcileStaleAsync(CancellationToken cancellationToken)
+    {
+        DateTime now = timeProvider.GetUtcNow().UtcDateTime;
+        DateTime staleBefore = now - TimeSpan.FromSeconds(_options.TimeoutSeconds + 30);
+        if (!dbContext.Database.IsRelational())
+        {
+            await InMemoryGate.WaitAsync(cancellationToken);
+            try
+            {
+                AiTokenBudgetReservation[] stale = await dbContext.AiTokenBudgetReservations
+                    .Where(item => item.Status == "reserved" && item.CreatedAt < staleBefore)
+                    .ToArrayAsync(cancellationToken);
+                foreach (AiTokenBudgetReservation reservation in stale)
+                {
+                    AiTokenBudgetPeriod period = await dbContext.AiTokenBudgetPeriods.SingleAsync(
+                        item => item.PeriodStart == reservation.PeriodStart, cancellationToken);
+                    period.ReservedTokens -= reservation.ReservedTokens;
+                    period.EstimatedConsumedTokens += reservation.ReservedTokens;
+                    reservation.ChargedTokens = reservation.ReservedTokens;
+                    reservation.Status = "settled";
+                    reservation.SettledAt = now;
+                }
+                await dbContext.SaveChangesAsync(cancellationToken);
+            }
+            finally
+            {
+                InMemoryGate.Release();
+            }
+            return;
+        }
+
+        DateTime[] periods = await dbContext.AiTokenBudgetReservations.AsNoTracking()
+            .Where(item => item.Status == "reserved" && item.CreatedAt < staleBefore)
+            .Select(item => item.PeriodStart).Distinct().ToArrayAsync(cancellationToken);
+        foreach (DateTime periodStart in periods)
+        {
+            await using var transaction = await dbContext.Database.BeginTransactionAsync(
+                IsolationLevel.ReadCommitted, cancellationToken);
+            await LockPeriodAsync(periodStart, cancellationToken);
+            await dbContext.Database.ExecuteSqlInterpolatedAsync($"""
+                WITH stale AS (
+                    UPDATE ai_token_budget_reservations
+                    SET status = 'settled', settled_at = {now},
+                        charged_tokens = reserved_tokens
+                    WHERE period_start = {periodStart} AND status = 'reserved'
+                      AND created_at < {staleBefore}
+                    RETURNING reserved_tokens
+                ), total AS (
+                    SELECT COALESCE(SUM(reserved_tokens), 0)::integer AS tokens FROM stale
+                )
+                UPDATE ai_token_budget_periods
+                SET reserved_tokens = reserved_tokens - total.tokens,
+                    estimated_consumed_tokens = estimated_consumed_tokens + total.tokens
+                FROM total
+                WHERE period_start = {periodStart} AND total.tokens > 0
+                """, cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+    }
+
     private async Task UpdateAsync(Guid reservationId, bool release, int? promptTokens,
         int? completionTokens, bool usageUnknown, CancellationToken cancellationToken)
     {
@@ -131,11 +194,8 @@ public sealed class AiTokenBudgetManager(
             ? await dbContext.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted,
                 cancellationToken) : null;
         AiTokenBudgetReservation? reservation = dbContext.Database.IsRelational()
-            ? await dbContext.AiTokenBudgetReservations.FromSqlInterpolated($"""
-                SELECT * FROM ai_token_budget_reservations
-                WHERE id = {reservationId}
-                FOR UPDATE
-                """).SingleOrDefaultAsync(cancellationToken)
+            ? await dbContext.AiTokenBudgetReservations.AsNoTracking()
+                .SingleOrDefaultAsync(item => item.Id == reservationId, cancellationToken)
             : await dbContext.AiTokenBudgetReservations.SingleOrDefaultAsync(
                 item => item.Id == reservationId, cancellationToken);
         if (reservation is null || reservation.Status != "reserved")
@@ -143,25 +203,44 @@ public sealed class AiTokenBudgetManager(
             if (transaction is not null) await transaction.CommitAsync(cancellationToken);
             return;
         }
-        AiTokenBudgetPeriod period = dbContext.Database.IsRelational()
-            ? await dbContext.AiTokenBudgetPeriods.FromSqlInterpolated($"""
-                SELECT * FROM ai_token_budget_periods
-                WHERE period_start = {reservation.PeriodStart}
-                FOR UPDATE
-                """).SingleAsync(cancellationToken)
-            : await dbContext.AiTokenBudgetPeriods.SingleAsync(
-                item => item.PeriodStart == reservation.PeriodStart, cancellationToken);
+        DateTime settledAt = timeProvider.GetUtcNow().UtcDateTime;
+        int? actual = promptTokens is int prompt && completionTokens is int completion
+            ? checked(prompt + completion) : null;
+        int charged = usageUnknown || actual is null ? reservation.ReservedTokens : actual.Value;
+        if (dbContext.Database.IsRelational())
+        {
+            await LockPeriodAsync(reservation.PeriodStart, cancellationToken);
+            int changed = await dbContext.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE ai_token_budget_reservations
+                SET status = {(release ? "released" : "settled")}, settled_at = {settledAt},
+                    actual_prompt_tokens = {(release ? null : promptTokens)},
+                    actual_completion_tokens = {(release ? null : completionTokens)},
+                    charged_tokens = {(release ? 0 : charged)}
+                WHERE id = {reservationId} AND status = 'reserved'
+                """, cancellationToken);
+            if (changed != 0)
+                await dbContext.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE ai_token_budget_periods
+                    SET reserved_tokens = reserved_tokens - {reservation.ReservedTokens},
+                        estimated_consumed_tokens = estimated_consumed_tokens +
+                            {(release ? 0 : charged)},
+                        actual_tokens = actual_tokens + {(release ? 0 : actual ?? 0)}
+                    WHERE period_start = {reservation.PeriodStart}
+                    """, cancellationToken);
+            await transaction!.CommitAsync(cancellationToken);
+            return;
+        }
+
+        AiTokenBudgetPeriod period = await dbContext.AiTokenBudgetPeriods.SingleAsync(
+            item => item.PeriodStart == reservation.PeriodStart, cancellationToken);
         period.ReservedTokens -= reservation.ReservedTokens;
-        reservation.SettledAt = timeProvider.GetUtcNow().UtcDateTime;
+        reservation.SettledAt = settledAt;
         if (release)
         {
             reservation.Status = "released";
         }
         else
         {
-            int? actual = promptTokens is int prompt && completionTokens is int completion
-                ? checked(prompt + completion) : null;
-            int charged = usageUnknown || actual is null ? reservation.ReservedTokens : actual.Value;
             period.EstimatedConsumedTokens += charged;
             if (actual is int actualTokens) period.ActualTokens += actualTokens;
             reservation.ActualPromptTokens = promptTokens;
@@ -172,6 +251,14 @@ public sealed class AiTokenBudgetManager(
         await dbContext.SaveChangesAsync(cancellationToken);
         if (transaction is not null) await transaction.CommitAsync(cancellationToken);
     }
+
+    private async Task LockPeriodAsync(DateTime periodStart,
+        CancellationToken cancellationToken) =>
+        await dbContext.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE ai_token_budget_periods
+            SET reserved_tokens = reserved_tokens
+            WHERE period_start = {periodStart}
+            """, cancellationToken);
 
     private (DateTime Start, DateTime End) GetPeriod(DateTime now)
     {

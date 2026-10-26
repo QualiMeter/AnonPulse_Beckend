@@ -81,10 +81,10 @@ public sealed class FeedbackAnalysisMigrationTests : IAsyncLifetime
         await using var secondQueueDb = new ApplicationDbContext(options);
         var firstQueue = new FeedbackAnalysisJobQueue(firstQueueDb, settings, TimeProvider.System);
         var secondQueue = new FeedbackAnalysisJobQueue(secondQueueDb, settings, TimeProvider.System);
-        Guid?[] claims = await Task.WhenAll(firstQueue.ClaimNextAsync(default),
+        FeedbackAnalysisLease?[] claims = await Task.WhenAll(firstQueue.ClaimNextAsync(default),
             secondQueue.ClaimNextAsync(default));
         Assert.Single(claims, item => item is not null);
-        Assert.Equal(analysisId, claims.Single(item => item is not null));
+        Assert.Equal(analysisId, claims.Single(item => item is not null)!.AnalysisId);
 
         await using (var verify = new ApplicationDbContext(options))
         {
@@ -95,7 +95,9 @@ public sealed class FeedbackAnalysisMigrationTests : IAsyncLifetime
                 WHERE id = {analysisId}
                 """);
             var recoveryQueue = new FeedbackAnalysisJobQueue(verify, settings, TimeProvider.System);
-            Assert.Equal(analysisId, await recoveryQueue.ClaimNextAsync(default));
+            FeedbackAnalysisLease recoveryLease = Assert.IsType<FeedbackAnalysisLease>(
+                await recoveryQueue.ClaimNextAsync(default));
+            Assert.Equal(analysisId, recoveryLease.AnalysisId);
             Assert.Equal(2, await verify.PollFeedbackAnalyses
                 .Where(item => item.Id == analysisId)
                 .Select(item => item.Attempts).SingleAsync());
@@ -111,8 +113,9 @@ public sealed class FeedbackAnalysisMigrationTests : IAsyncLifetime
                 new PersonalDataSanitizer(),
                 new AiTokenBudgetManager(verify, settings, time), settings, time,
                 NullLogger<FeedbackAnalysisJobProcessor>.Instance);
-            await quotaProcessor.ProcessAsync(analysisId, default);
+            await quotaProcessor.ProcessAsync(recoveryLease, default);
 
+            claimed = await verify.PollFeedbackAnalyses.SingleAsync(item => item.Id == analysisId);
             Assert.Equal(FeedbackAnalysisStatus.Failed, claimed.Status);
             Assert.Equal(time.GetUtcNow().AddMinutes(2).UtcDateTime, claimed.NextAttemptAt);
             var cooldownService = new FeedbackAnalysisService(verify, settings, time);
@@ -139,10 +142,12 @@ public sealed class FeedbackAnalysisMigrationTests : IAsyncLifetime
             await using var retryQueueDb2 = new ApplicationDbContext(options);
             var retryQueue1 = new FeedbackAnalysisJobQueue(retryQueueDb1, settings, time);
             var retryQueue2 = new FeedbackAnalysisJobQueue(retryQueueDb2, settings, time);
-            Guid?[] retryClaims = await Task.WhenAll(retryQueue1.ClaimNextAsync(default),
+            FeedbackAnalysisLease?[] retryClaims = await Task.WhenAll(
+                retryQueue1.ClaimNextAsync(default),
                 retryQueue2.ClaimNextAsync(default));
             Assert.Single(retryClaims, claim => claim is not null);
-            Assert.Equal(analysisId, retryClaims.Single(claim => claim is not null));
+            FeedbackAnalysisLease retryLease = retryClaims.Single(claim => claim is not null)!;
+            Assert.Equal(analysisId, retryLease.AnalysisId);
 
             var successProvider = new CountingProvider(input => Task.FromResult(
                 new ProviderAnalysisResult(new ProviderReport("Итог",
@@ -153,7 +158,7 @@ public sealed class FeedbackAnalysisMigrationTests : IAsyncLifetime
                 new PersonalDataSanitizer(),
                 new AiTokenBudgetManager(processorDb, settings, time), settings, time,
                 NullLogger<FeedbackAnalysisJobProcessor>.Instance);
-            await successProcessor.ProcessAsync(analysisId, default);
+            await successProcessor.ProcessAsync(retryLease, default);
             Assert.Equal(1, successProvider.Calls);
 
             await using var completedDb1 = new ApplicationDbContext(options);
@@ -168,6 +173,86 @@ public sealed class FeedbackAnalysisMigrationTests : IAsyncLifetime
             await using var completedQueueDb = new ApplicationDbContext(options);
             Assert.Null(await new FeedbackAnalysisJobQueue(completedQueueDb, settings, time)
                 .ClaimNextAsync(default));
+        }
+
+        Guid staleQuestion = Guid.NewGuid();
+        await using (var staleSeed = new ApplicationDbContext(options))
+        {
+            await staleSeed.Database.ExecuteSqlInterpolatedAsync($"""
+                INSERT INTO poll_questions
+                    (id, poll_id, text, position, allows_multiple_answers, question_type,
+                     text_purpose)
+                VALUES ({staleQuestion}, {poll}, 'Stale worker feedback', 1, FALSE, 'text',
+                        'feedback');
+                INSERT INTO poll_text_answers (id, question_id, text)
+                VALUES ({Guid.NewGuid()}, {staleQuestion}, 'Сохранить только свежий отчёт');
+                """);
+            FeedbackAnalysisServiceResult started = await new FeedbackAnalysisService(
+                staleSeed, settings, TimeProvider.System).StartAsync(owner, false, poll,
+                staleQuestion, true, default);
+            Assert.Equal(FeedbackAnalysisOutcome.Succeeded, started.Outcome);
+        }
+
+        FeedbackAnalysisLease staleLease;
+        await using (var staleQueueDb = new ApplicationDbContext(options))
+            staleLease = Assert.IsType<FeedbackAnalysisLease>(await new FeedbackAnalysisJobQueue(
+                staleQueueDb, settings, TimeProvider.System).ClaimNextAsync(default));
+        var providerEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseProvider = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var staleProcessorDb = new ApplicationDbContext(options);
+        var staleProvider = new BlockingProvider(providerEntered, releaseProvider);
+        Task staleWork = new FeedbackAnalysisJobProcessor(staleProcessorDb, staleProvider,
+            new PersonalDataSanitizer(),
+            new AiTokenBudgetManager(staleProcessorDb, settings, TimeProvider.System), settings,
+            TimeProvider.System, NullLogger<FeedbackAnalysisJobProcessor>.Instance)
+            .ProcessAsync(staleLease, default);
+        await providerEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await using (var expireDb = new ApplicationDbContext(options))
+            await expireDb.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE poll_feedback_analyses
+                SET started_at = {DateTime.UtcNow.AddMinutes(-10)}
+                WHERE id = {staleLease.AnalysisId}
+                """);
+        FeedbackAnalysisLease currentLease;
+        await using (var currentQueueDb = new ApplicationDbContext(options))
+            currentLease = Assert.IsType<FeedbackAnalysisLease>(await new FeedbackAnalysisJobQueue(
+                currentQueueDb, settings, TimeProvider.System).ClaimNextAsync(default));
+        Assert.NotEqual(staleLease.LeaseId, currentLease.LeaseId);
+        Assert.True(currentLease.Generation > staleLease.Generation);
+
+        releaseProvider.SetResult();
+        await staleWork.WaitAsync(TimeSpan.FromSeconds(5));
+        await using (var afterStale = new ApplicationDbContext(options))
+        {
+            PollFeedbackAnalysis row = await afterStale.PollFeedbackAnalyses
+                .SingleAsync(item => item.Id == staleLease.AnalysisId);
+            Assert.Equal(FeedbackAnalysisStatus.Processing, row.Status);
+            Assert.Equal(currentLease.LeaseId, row.LeaseId);
+            Assert.Null(row.ReportJson);
+        }
+
+        var currentProvider = new CountingProvider(input => Task.FromResult(
+            new ProviderAnalysisResult(new ProviderReport("Свежий отчёт",
+                [new("Тема", "Актуальный результат", "neutral",
+                    [input.Answers[0].TemporaryId])], [], []), 11, 7)));
+        await using (var currentProcessorDb = new ApplicationDbContext(options))
+            await new FeedbackAnalysisJobProcessor(currentProcessorDb, currentProvider,
+                new PersonalDataSanitizer(),
+                new AiTokenBudgetManager(currentProcessorDb, settings, TimeProvider.System),
+                settings, TimeProvider.System,
+                NullLogger<FeedbackAnalysisJobProcessor>.Instance)
+                .ProcessAsync(currentLease, default);
+        await using (var afterCurrent = new ApplicationDbContext(options))
+        {
+            PollFeedbackAnalysis row = await afterCurrent.PollFeedbackAnalyses
+                .SingleAsync(item => item.Id == currentLease.AnalysisId);
+            Assert.Equal(FeedbackAnalysisStatus.Completed, row.Status);
+            Assert.Contains("Свежий отчёт", row.ReportJson);
+            Assert.Equal(11, row.PromptTokens);
+            Assert.Equal(7, row.CompletionTokens);
         }
 
         await using (var deleteDb = new ApplicationDbContext(options))
@@ -215,6 +300,22 @@ public sealed class FeedbackAnalysisMigrationTests : IAsyncLifetime
         {
             Calls++;
             return handler(input);
+        }
+    }
+
+    private sealed class BlockingProvider(TaskCompletionSource entered,
+        TaskCompletionSource release) : IFeedbackAnalysisProvider
+    {
+        public string Name => "Blocking";
+
+        public async Task<ProviderAnalysisResult> AnalyzeAsync(FeedbackAnalysisInput input,
+            CancellationToken cancellationToken)
+        {
+            entered.SetResult();
+            await release.Task.WaitAsync(cancellationToken);
+            return new(new ProviderReport("Устаревший отчёт",
+                [new("Тема", "Не должен сохраниться", "neutral",
+                    [input.Answers[0].TemporaryId])], [], []), 100, 50);
         }
     }
 }

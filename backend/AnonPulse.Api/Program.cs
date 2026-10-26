@@ -117,6 +117,7 @@ builder.Services.AddScoped<IFeedbackAnalysisJobQueue, FeedbackAnalysisJobQueue>(
 builder.Services.AddScoped<IFeedbackAnalysisProvider, GroqFeedbackAnalysisProvider>();
 builder.Services.AddScoped<IAiTokenBudgetManager, AiTokenBudgetManager>();
 builder.Services.AddSingleton<IPersonalDataSanitizer, PersonalDataSanitizer>();
+builder.Services.AddHostedService<AiTokenBudgetReconciliationWorker>();
 builder.Services.AddHostedService<FeedbackAnalysisWorker>();
 builder.Services.AddScoped<IKnowledgeGradingService, KnowledgeGradingService>();
 builder.Services.AddScoped<IKnowledgeGradingJobProcessor, KnowledgeGradingJobProcessor>();

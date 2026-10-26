@@ -24,17 +24,17 @@ public sealed class FeedbackAnalysisWorker(
             try
             {
                 using IServiceScope scope = scopeFactory.CreateScope();
-                Guid? id = await scope.ServiceProvider
+                FeedbackAnalysisLease? lease = await scope.ServiceProvider
                     .GetRequiredService<IFeedbackAnalysisJobQueue>()
                     .ClaimNextAsync(stoppingToken);
-                if (id is null)
+                if (lease is null)
                 {
                     await Task.Delay(TimeSpan.FromSeconds(_options.WorkerPollSeconds),
                         timeProvider, stoppingToken);
                     continue;
                 }
                 await scope.ServiceProvider.GetRequiredService<IFeedbackAnalysisJobProcessor>()
-                    .ProcessAsync(id.Value, stoppingToken);
+                    .ProcessAsync(lease, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

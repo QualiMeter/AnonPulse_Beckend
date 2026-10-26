@@ -1,3 +1,4 @@
+using System.Data;
 using System.Text.Json;
 using AnonPulse.Api.Contracts.FeedbackAnalysis;
 using AnonPulse.Api.Data;
@@ -9,7 +10,7 @@ namespace AnonPulse.Api.Services.FeedbackAnalysis;
 
 public interface IFeedbackAnalysisJobProcessor
 {
-    Task ProcessAsync(Guid analysisId, CancellationToken cancellationToken);
+    Task ProcessAsync(FeedbackAnalysisLease lease, CancellationToken cancellationToken);
 }
 
 public sealed class FeedbackAnalysisJobProcessor(
@@ -24,11 +25,15 @@ public sealed class FeedbackAnalysisJobProcessor(
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly AiOptions _options = options.Value;
 
-    public async Task ProcessAsync(Guid analysisId, CancellationToken cancellationToken)
+    public async Task ProcessAsync(FeedbackAnalysisLease lease,
+        CancellationToken cancellationToken)
     {
         PollFeedbackAnalysis? analysis = await dbContext.PollFeedbackAnalyses
-            .SingleOrDefaultAsync(item => item.Id == analysisId, cancellationToken);
-        if (analysis is null || analysis.Status != FeedbackAnalysisStatus.Processing) return;
+            .SingleOrDefaultAsync(item => item.Id == lease.AnalysisId &&
+                item.Status == FeedbackAnalysisStatus.Processing &&
+                item.LeaseId == lease.LeaseId && item.LeaseGeneration == lease.Generation,
+                cancellationToken);
+        if (analysis is null) return;
         Guid? activeReservationId = null;
 
         try
@@ -93,48 +98,71 @@ public sealed class FeedbackAnalysisJobProcessor(
 
             FeedbackReportResponse report = ValidateAndBuildReport(providerResult.Report, inputIds,
                 analysis.AnswerCount);
-            analysis.ReportJson = JsonSerializer.Serialize(report, JsonOptions);
-            analysis.PromptTokens = providerResult.PromptTokens;
-            analysis.CompletionTokens = providerResult.CompletionTokens;
-            analysis.Status = FeedbackAnalysisStatus.Completed;
-            analysis.ErrorCode = null;
-            analysis.CompletedAt = timeProvider.GetUtcNow().UtcDateTime;
-            analysis.NextAttemptAt = null;
-            analysis.LeaseId = null;
-            await dbContext.SaveChangesAsync(cancellationToken);
+            await PersistSuccessAsync(lease, report, providerResult, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             if (activeReservationId is Guid held)
                 await budget.SettleAsync(held, null, null, true, CancellationToken.None);
-            analysis.Status = FeedbackAnalysisStatus.Pending;
-            analysis.NextAttemptAt = timeProvider.GetUtcNow().UtcDateTime;
-            analysis.LeaseId = null;
-            await dbContext.SaveChangesAsync(CancellationToken.None);
+            await ReturnToQueueAsync(lease, CancellationToken.None);
             throw;
         }
         catch (FeedbackProviderException exception)
         {
-            await RecordFailureAsync(analysis, exception.ErrorCode, exception.Retryable,
+            await RecordFailureAsync(lease, exception.ErrorCode, exception.Retryable,
                 exception.RetryAfter, cancellationToken);
         }
         catch (Exception exception)
         {
             logger.LogError(exception, "Feedback analysis job {AnalysisId} failed with an internal error.",
-                analysis.Id);
-            await RecordFailureAsync(analysis, "analysis_internal_error", true, null,
+                lease.AnalysisId);
+            await RecordFailureAsync(lease, "analysis_internal_error", true, null,
                 cancellationToken);
         }
     }
 
-    private async Task RecordFailureAsync(PollFeedbackAnalysis analysis, string code,
+    private async Task PersistSuccessAsync(FeedbackAnalysisLease lease,
+        FeedbackReportResponse report, ProviderAnalysisResult providerResult,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = dbContext.Database.IsRelational()
+            ? await dbContext.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted,
+                cancellationToken) : null;
+        PollFeedbackAnalysis? analysis = await LockCurrentAsync(lease, cancellationToken);
+        if (!OwnsLease(analysis, lease))
+        {
+            if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
+            return;
+        }
+        analysis!.ReportJson = JsonSerializer.Serialize(report, JsonOptions);
+        analysis.PromptTokens = providerResult.PromptTokens;
+        analysis.CompletionTokens = providerResult.CompletionTokens;
+        analysis.Status = FeedbackAnalysisStatus.Completed;
+        analysis.ErrorCode = null;
+        analysis.CompletedAt = timeProvider.GetUtcNow().UtcDateTime;
+        analysis.NextAttemptAt = null;
+        analysis.LeaseId = null;
+        await dbContext.SaveChangesAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+    }
+
+    private async Task RecordFailureAsync(FeedbackAnalysisLease lease, string code,
         bool retryable, TimeSpan? retryAfter, CancellationToken cancellationToken)
     {
+        await using var transaction = dbContext.Database.IsRelational()
+            ? await dbContext.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted,
+                cancellationToken) : null;
+        PollFeedbackAnalysis? analysis = await LockCurrentAsync(lease, cancellationToken);
+        if (!OwnsLease(analysis, lease))
+        {
+            if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
+            return;
+        }
         int maximumAttempts = _options.MaxRetries + 1;
         DateTime now = timeProvider.GetUtcNow().UtcDateTime;
         TimeSpan minimumRateLimitCooldown = TimeSpan.FromSeconds(
             Math.Max(1, _options.RetryCooldownSeconds));
-        if (retryable && analysis.Attempts < maximumAttempts)
+        if (retryable && analysis!.Attempts < maximumAttempts)
         {
             TimeSpan delay = retryAfter ?? TimeSpan.FromSeconds(
                 Math.Min(Math.Pow(2, analysis.Attempts) * 5, 3600));
@@ -147,7 +175,7 @@ public sealed class FeedbackAnalysisJobProcessor(
         }
         else
         {
-            analysis.Status = FeedbackAnalysisStatus.Failed;
+            analysis!.Status = FeedbackAnalysisStatus.Failed;
             analysis.CompletedAt = now;
             if (code is "free_quota_exhausted" or "ai_period_budget_exhausted")
             {
@@ -163,7 +191,46 @@ public sealed class FeedbackAnalysisJobProcessor(
         analysis.ErrorCode = code;
         analysis.LeaseId = null;
         await dbContext.SaveChangesAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
     }
+
+    private async Task ReturnToQueueAsync(FeedbackAnalysisLease lease,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = dbContext.Database.IsRelational()
+            ? await dbContext.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted,
+                cancellationToken) : null;
+        PollFeedbackAnalysis? analysis = await LockCurrentAsync(lease, cancellationToken);
+        if (!OwnsLease(analysis, lease))
+        {
+            if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
+            return;
+        }
+        analysis!.Status = FeedbackAnalysisStatus.Pending;
+        analysis.NextAttemptAt = timeProvider.GetUtcNow().UtcDateTime;
+        analysis.LeaseId = null;
+        await dbContext.SaveChangesAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+    }
+
+    private async Task<PollFeedbackAnalysis?> LockCurrentAsync(FeedbackAnalysisLease lease,
+        CancellationToken cancellationToken)
+    {
+        if (dbContext.Database.IsRelational()) dbContext.ChangeTracker.Clear();
+        return dbContext.Database.IsRelational()
+            ? await dbContext.PollFeedbackAnalyses.FromSqlInterpolated($"""
+                SELECT * FROM poll_feedback_analyses
+                WHERE id = {lease.AnalysisId}
+                FOR UPDATE
+                """).SingleOrDefaultAsync(cancellationToken)
+            : await dbContext.PollFeedbackAnalyses.SingleOrDefaultAsync(
+                item => item.Id == lease.AnalysisId, cancellationToken);
+    }
+
+    private static bool OwnsLease(PollFeedbackAnalysis? analysis,
+        FeedbackAnalysisLease lease) =>
+        analysis is { Status: FeedbackAnalysisStatus.Processing } &&
+        analysis.LeaseId == lease.LeaseId && analysis.LeaseGeneration == lease.Generation;
 
     private static FeedbackReportResponse ValidateAndBuildReport(
         ProviderReport source, HashSet<string> inputIds, int answerCount)

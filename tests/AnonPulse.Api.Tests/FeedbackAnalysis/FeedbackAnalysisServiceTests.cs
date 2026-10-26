@@ -289,7 +289,9 @@ public sealed class FeedbackAnalysisServiceTests
             AnswerFingerprint = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant(),
             CreatedAt = DateTime.UtcNow,
             StartedAt = DateTime.UtcNow,
-            Attempts = 1
+            Attempts = 1,
+            LeaseId = status == FeedbackAnalysisStatus.Processing ? Guid.NewGuid() : null,
+            LeaseGeneration = status == FeedbackAnalysisStatus.Processing ? 1 : 0
         };
         db.Add(analysis);
         return analysis;
