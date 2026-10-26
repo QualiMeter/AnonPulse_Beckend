@@ -1,5 +1,3 @@
-using System.Net;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -19,85 +17,19 @@ public sealed class GroqFeedbackAnalysisProvider(
         CancellationToken cancellationToken)
     {
         AiOptions settings = options.Value;
-        if (string.IsNullOrWhiteSpace(settings.Groq.ApiKey))
-        {
-            throw new FeedbackProviderException("ai_not_configured", false);
-        }
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, "chat/completions");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", settings.Groq.ApiKey);
-        request.Content = new StringContent(
-            JsonSerializer.Serialize(CreateRequest(input, settings.ReasoningEffort), JsonOptions),
-            Encoding.UTF8,
-            "application/json");
-
-        HttpResponseMessage response;
         try
         {
-            response = await httpClientFactory.CreateClient("groq-feedback-analysis")
-                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            GroqStructuredOutputResponse response = await GroqStructuredOutputClient.SendAsync(
+                httpClientFactory, settings, CreateRequest(input, settings.ReasoningEffort),
+                cancellationToken);
+            ProviderReport? report = JsonSerializer.Deserialize<ProviderReport>(response.Content, JsonOptions);
+            if (report is null) throw new JsonException("Empty structured result.");
+            return new ProviderAnalysisResult(report, response.PromptTokens, response.CompletionTokens);
         }
-        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        catch (JsonException exception)
         {
-            throw new FeedbackProviderException("provider_timeout", true, null, exception);
+            throw new FeedbackProviderException("invalid_provider_response", false, null, exception);
         }
-        catch (HttpRequestException exception)
-        {
-            throw new FeedbackProviderException("provider_unavailable", true, null, exception);
-        }
-
-        using (response)
-        {
-            if (response.StatusCode == HttpStatusCode.TooManyRequests)
-            {
-                TimeSpan? retryAfter = response.Headers.RetryAfter?.Delta;
-                if (retryAfter is null && response.Headers.RetryAfter?.Date is DateTimeOffset date)
-                {
-                    retryAfter = date - DateTimeOffset.UtcNow;
-                }
-                throw new FeedbackProviderException("free_quota_exhausted", true,
-                    retryAfter > TimeSpan.Zero ? retryAfter : TimeSpan.FromMinutes(1));
-            }
-
-            if (!response.IsSuccessStatusCode)
-            {
-                if (response.StatusCode == HttpStatusCode.RequestEntityTooLarge)
-                    throw new FeedbackProviderException("provider_token_limit_exceeded", false);
-                bool retryable = (int)response.StatusCode >= 500;
-                throw new FeedbackProviderException(
-                    retryable ? "provider_unavailable" : "provider_rejected_request",
-                    retryable);
-            }
-
-            try
-            {
-                await using Stream body = await response.Content.ReadAsStreamAsync(cancellationToken);
-                using JsonDocument envelope = await JsonDocument.ParseAsync(body, cancellationToken: cancellationToken);
-                JsonElement root = envelope.RootElement;
-                string content = root.GetProperty("choices")[0].GetProperty("message")
-                    .GetProperty("content").GetString()!;
-                ProviderReport? report = JsonSerializer.Deserialize<ProviderReport>(content, JsonOptions);
-                if (report is null)
-                {
-                    throw new JsonException("Empty structured result.");
-                }
-                int? promptTokens = TryGetInt(root, "prompt_tokens");
-                int? completionTokens = TryGetInt(root, "completion_tokens");
-                return new ProviderAnalysisResult(report, promptTokens, completionTokens);
-            }
-            catch (Exception exception) when (exception is JsonException or KeyNotFoundException or
-                                               InvalidOperationException or IndexOutOfRangeException)
-            {
-                throw new FeedbackProviderException("invalid_provider_response", false, null, exception);
-            }
-        }
-    }
-
-    private static int? TryGetInt(JsonElement root, string name)
-    {
-        return root.TryGetProperty("usage", out JsonElement usage) &&
-               usage.TryGetProperty(name, out JsonElement value) && value.TryGetInt32(out int parsed)
-            ? parsed : null;
     }
 
     internal static int EstimateInputTokens(string model, IReadOnlyList<string> answerTexts,

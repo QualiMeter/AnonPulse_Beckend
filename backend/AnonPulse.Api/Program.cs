@@ -11,6 +11,7 @@ using AnonPulse.Api.Services.PollResults;
 using AnonPulse.Api.Services.Voting;
 using AnonPulse.Api.Services.FeedbackAnalysis;
 using AnonPulse.Api.Services.Tests;
+using AnonPulse.Api.Services.KnowledgeGrading;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -116,6 +117,11 @@ builder.Services.AddScoped<IFeedbackAnalysisJobQueue, FeedbackAnalysisJobQueue>(
 builder.Services.AddScoped<IFeedbackAnalysisProvider, GroqFeedbackAnalysisProvider>();
 builder.Services.AddSingleton<IPersonalDataSanitizer, PersonalDataSanitizer>();
 builder.Services.AddHostedService<FeedbackAnalysisWorker>();
+builder.Services.AddScoped<IKnowledgeGradingService, KnowledgeGradingService>();
+builder.Services.AddScoped<IKnowledgeGradingJobProcessor, KnowledgeGradingJobProcessor>();
+builder.Services.AddScoped<IKnowledgeGradingJobQueue, KnowledgeGradingJobQueue>();
+builder.Services.AddScoped<IKnowledgeGradingProvider, GroqKnowledgeGradingProvider>();
+builder.Services.AddHostedService<KnowledgeGradingWorker>();
 builder.Services.AddOptions<AiOptions>()
     .Bind(builder.Configuration.GetSection(AiOptions.SectionName))
     .Validate(options => options.TimeoutSeconds is >= 1 and <= 600,
@@ -127,8 +133,17 @@ builder.Services.AddOptions<AiOptions>()
     .Validate(options => options.MaxAnswers > 0 && options.MaxTotalCharacters > 0 &&
                          options.MaxInputTokens > 0 && options.MaxOutputTokens > 0,
         "AI analysis limits must be positive.")
+    .Validate(options => options.KnowledgeMaxAnswers > 0 &&
+                         options.KnowledgeMaxTotalCharacters > 0 &&
+                         options.KnowledgeMaxInputTokens > 0 &&
+                         options.KnowledgeMaxOutputTokens > 0 &&
+                         options.KnowledgeMaxReservedTokens >=
+                         options.KnowledgeMaxInputTokens + options.KnowledgeMaxOutputTokens,
+        "Knowledge-grading limits must be positive and fit the reserved token budget.")
     .Validate(options => options.ReasoningEffort is "low" or "medium" or "high",
         "GPT-OSS reasoning effort must be low, medium, or high.")
+    .Validate(options => options.KnowledgeGradingModel == "openai/gpt-oss-20b",
+        "Knowledge grading must use openai/gpt-oss-20b.")
     .Validate(options => options.RetryCooldownSeconds is >= 1 and <= 86_400,
         "AI retry cooldown must be between 1 second and 24 hours.")
     .Validate(options => options.WorkerPollSeconds is >= 1 and <= 60,
@@ -136,11 +151,15 @@ builder.Services.AddOptions<AiOptions>()
     .Validate(options => Uri.TryCreate(options.Groq.BaseUrl, UriKind.Absolute, out _),
         "Groq base URL must be an absolute URL.")
     .ValidateOnStart();
-builder.Services.AddHttpClient("groq-feedback-analysis", (serviceProvider, client) =>
+builder.Services.AddHttpClient("groq-ai", (serviceProvider, client) =>
 {
     AiOptions options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<AiOptions>>().Value;
     client.BaseAddress = new Uri(options.Groq.BaseUrl.TrimEnd('/') + "/");
     client.Timeout = TimeSpan.FromSeconds(options.TimeoutSeconds);
+}).ConfigurePrimaryHttpMessageHandler(serviceProvider =>
+{
+    AiOptions options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<AiOptions>>().Value;
+    return new SocketsHttpHandler { MaxConnectionsPerServer = options.MaxConcurrentJobs };
 });
 builder.Services.AddOptions<TextAnswerOptions>()
     .Bind(builder.Configuration.GetSection(TextAnswerOptions.SectionName))

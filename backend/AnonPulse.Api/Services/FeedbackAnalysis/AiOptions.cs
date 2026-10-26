@@ -4,6 +4,8 @@ public sealed class AiOptions
 {
     public const string SectionName = "Ai";
     public bool Enabled { get; set; }
+    public bool KnowledgeGradingEnabled { get; set; }
+    public string KnowledgeGradingModel { get; set; } = "openai/gpt-oss-20b";
     public string Provider { get; set; } = "Groq";
     public string Model { get; set; } = "openai/gpt-oss-20b";
     public int TimeoutSeconds { get; set; } = 60;
@@ -16,6 +18,11 @@ public sealed class AiOptions
     public string ReasoningEffort { get; set; } = "low";
     public int RetryCooldownSeconds { get; set; } = 60;
     public int WorkerPollSeconds { get; set; } = 5;
+    public int KnowledgeMaxAnswers { get; set; } = 50;
+    public int KnowledgeMaxTotalCharacters { get; set; } = 20_000;
+    public int KnowledgeMaxInputTokens { get; set; } = 6_000;
+    public int KnowledgeMaxOutputTokens { get; set; } = 4_000;
+    public int KnowledgeMaxReservedTokens { get; set; } = 10_000;
     public GroqOptions Groq { get; set; } = new();
 }
 

@@ -27,6 +27,12 @@ public class ApplicationDbContext
 
     public DbSet<PollFeedbackAnalysis> PollFeedbackAnalyses => Set<PollFeedbackAnalysis>();
 
+    public DbSet<PollKnowledgeGradingJob> PollKnowledgeGradingJobs =>
+        Set<PollKnowledgeGradingJob>();
+
+    public DbSet<PollKnowledgeGradingSuggestion> PollKnowledgeGradingSuggestions =>
+        Set<PollKnowledgeGradingSuggestion>();
+
     public DbSet<PollQuestionKnowledgeSettings> PollQuestionKnowledgeSettings =>
         Set<PollQuestionKnowledgeSettings>();
 

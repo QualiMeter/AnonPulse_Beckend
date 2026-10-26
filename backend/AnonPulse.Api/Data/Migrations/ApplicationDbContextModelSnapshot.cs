@@ -556,6 +556,211 @@ namespace AnonPulse.Api.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("AnonPulse.Api.Models.PollKnowledgeGradingJob", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AlgorithmVersion")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("algorithm_version");
+
+                    b.Property<int>("AnswerCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("answer_count");
+
+                    b.Property<string>("AnswersSnapshotJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("answers_snapshot");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempts");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<int?>("CompletionTokens")
+                        .HasColumnType("integer")
+                        .HasColumnName("completion_tokens");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("ErrorCode")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("error_code");
+
+                    b.Property<string>("ExpectedAnswerSnapshot")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("expected_answer_snapshot");
+
+                    b.Property<string>("GradingCriteriaSnapshot")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("grading_criteria_snapshot");
+
+                    b.Property<int>("MaxScoreSnapshot")
+                        .HasColumnType("integer")
+                        .HasColumnName("max_score_snapshot");
+
+                    b.Property<string>("Model")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)")
+                        .HasColumnName("model");
+
+                    b.Property<DateTime?>("NextAttemptAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("next_attempt_at");
+
+                    b.Property<Guid>("PollId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("poll_id");
+
+                    b.Property<int?>("PromptTokens")
+                        .HasColumnType("integer")
+                        .HasColumnName("prompt_tokens");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("provider");
+
+                    b.Property<Guid>("QuestionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("question_id");
+
+                    b.Property<int>("ReservedInputTokens")
+                        .HasColumnType("integer")
+                        .HasColumnName("reserved_input_tokens");
+
+                    b.Property<int>("ReservedOutputTokens")
+                        .HasColumnType("integer")
+                        .HasColumnName("reserved_output_tokens");
+
+                    b.Property<string>("SnapshotFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("snapshot_fingerprint");
+
+                    b.Property<DateTime?>("StartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("started_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("status");
+
+                    b.Property<int>("SuggestedCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("suggested_count");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PollId");
+
+                    b.HasIndex("QuestionId", "SnapshotFingerprint")
+                        .IsUnique()
+                        .HasDatabaseName("ux_knowledge_grading_question_fingerprint");
+
+                    b.HasIndex("Status", "NextAttemptAt", "CreatedAt")
+                        .HasDatabaseName("ix_knowledge_grading_queue");
+
+                    b.ToTable("poll_knowledge_grading_jobs", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_knowledge_grading_jobs_attempts", "attempts >= 0");
+
+                            t.HasCheckConstraint("ck_knowledge_grading_jobs_budget", "reserved_input_tokens > 0 AND reserved_output_tokens > 0");
+
+                            t.HasCheckConstraint("ck_knowledge_grading_jobs_counts", "answer_count > 0 AND suggested_count >= 0 AND suggested_count <= answer_count");
+
+                            t.HasCheckConstraint("ck_knowledge_grading_jobs_score", "max_score_snapshot BETWEEN 1 AND 100");
+
+                            t.HasCheckConstraint("ck_knowledge_grading_jobs_status", "status IN ('pending', 'processing', 'completed', 'failed')");
+                        });
+                });
+
+            modelBuilder.Entity("AnonPulse.Api.Models.PollKnowledgeGradingSuggestion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AnswerId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("answer_id");
+
+                    b.Property<string>("CorrectPointsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("correct_points");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Explanation")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("explanation");
+
+                    b.Property<Guid>("JobId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("job_id");
+
+                    b.Property<int>("MaxScore")
+                        .HasColumnType("integer")
+                        .HasColumnName("max_score");
+
+                    b.Property<string>("MissingOrIncorrectPointsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("missing_or_incorrect_points");
+
+                    b.Property<bool>("NeedsReview")
+                        .HasColumnType("boolean")
+                        .HasColumnName("needs_review");
+
+                    b.Property<string>("ReviewReasonsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("review_reasons");
+
+                    b.Property<int>("SuggestedScore")
+                        .HasColumnType("integer")
+                        .HasColumnName("suggested_score");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AnswerId");
+
+                    b.HasIndex("JobId", "AnswerId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_knowledge_grading_suggestions_job_answer");
+
+                    b.ToTable("poll_knowledge_grading_suggestions", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_knowledge_grading_suggestions_explanation", "btrim(explanation) <> ''");
+
+                            t.HasCheckConstraint("ck_knowledge_grading_suggestions_score", "max_score BETWEEN 1 AND 100 AND suggested_score BETWEEN 0 AND max_score");
+                        });
+                });
+
             modelBuilder.Entity("AnonPulse.Api.Models.PollOption", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1065,6 +1270,44 @@ namespace AnonPulse.Api.Data.Migrations
                     b.Navigation("Question");
                 });
 
+            modelBuilder.Entity("AnonPulse.Api.Models.PollKnowledgeGradingJob", b =>
+                {
+                    b.HasOne("AnonPulse.Api.Models.Poll", "Poll")
+                        .WithMany("KnowledgeGradingJobs")
+                        .HasForeignKey("PollId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("AnonPulse.Api.Models.PollQuestion", "Question")
+                        .WithMany("KnowledgeGradingJobs")
+                        .HasForeignKey("QuestionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Poll");
+
+                    b.Navigation("Question");
+                });
+
+            modelBuilder.Entity("AnonPulse.Api.Models.PollKnowledgeGradingSuggestion", b =>
+                {
+                    b.HasOne("AnonPulse.Api.Models.NamedAttemptAnswer", "Answer")
+                        .WithMany()
+                        .HasForeignKey("AnswerId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("AnonPulse.Api.Models.PollKnowledgeGradingJob", "Job")
+                        .WithMany("Suggestions")
+                        .HasForeignKey("JobId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Answer");
+
+                    b.Navigation("Job");
+                });
+
             modelBuilder.Entity("AnonPulse.Api.Models.PollOption", b =>
                 {
                     b.HasOne("AnonPulse.Api.Models.PollQuestion", "Question")
@@ -1250,11 +1493,18 @@ namespace AnonPulse.Api.Data.Migrations
 
                     b.Navigation("IdentifiedSubmissions");
 
+                    b.Navigation("KnowledgeGradingJobs");
+
                     b.Navigation("NamedAttempts");
 
                     b.Navigation("Questions");
 
                     b.Navigation("VoteParticipations");
+                });
+
+            modelBuilder.Entity("AnonPulse.Api.Models.PollKnowledgeGradingJob", b =>
+                {
+                    b.Navigation("Suggestions");
                 });
 
             modelBuilder.Entity("AnonPulse.Api.Models.PollOption", b =>
@@ -1271,6 +1521,8 @@ namespace AnonPulse.Api.Data.Migrations
                     b.Navigation("CorrectOptions");
 
                     b.Navigation("FeedbackAnalyses");
+
+                    b.Navigation("KnowledgeGradingJobs");
 
                     b.Navigation("KnowledgeSettings");
 
