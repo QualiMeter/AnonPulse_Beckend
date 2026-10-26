@@ -15,7 +15,7 @@ public sealed class PublicTestSubmissionsController(ITestSubmissionService servi
     : ControllerBase
 {
     [HttpPost]
-    [EnableRateLimiting("public-voting")]
+    [EnableRateLimiting("public-test-submissions")]
     [TextAnswerRequestSizeLimit]
     public async Task<ActionResult<TestSubmissionCreatedResponse>> Submit(
         Guid pollId,

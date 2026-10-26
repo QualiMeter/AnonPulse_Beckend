@@ -51,6 +51,7 @@ public sealed class PublicVotingEndpointsTests : IAsyncLifetime
             [new(poll.QuestionIds[0], poll.OptionIds[0][0])]);
 
         Assert.Equal(HttpStatusCode.OK, getResponse.StatusCode);
+        Assert.True(getResponse.Headers.Contains("Set-Cookie"));
         Assert.NotNull(publicPoll);
         Assert.Equal(poll.Id, publicPoll.Id);
         Assert.Single(publicPoll.Questions);

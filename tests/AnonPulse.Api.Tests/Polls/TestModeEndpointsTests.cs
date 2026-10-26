@@ -91,6 +91,55 @@ public sealed class TestModeEndpointsTests : IAsyncLifetime
         }
     }
 
+    public static TheoryData<decimal, HttpStatusCode> WeightCases => new()
+    {
+        { 0m, HttpStatusCode.BadRequest },
+        { 0.001m, HttpStatusCode.BadRequest },
+        { 0.01m, HttpStatusCode.Created },
+        { 1.234m, HttpStatusCode.BadRequest },
+        { 10000m, HttpStatusCode.Created },
+        { 10000.01m, HttpStatusCode.BadRequest }
+    };
+
+    [Theory]
+    [MemberData(nameof(WeightCases))]
+    public async Task TestWeight_MatchesNumericTenTwoValidation(
+        decimal weight,
+        HttpStatusCode expectedStatus)
+    {
+        SeededUser teacher = await CreateUserAsync(RoleNames.Teacher);
+        using HttpClient client = _factory.CreateHttpsClient();
+        await LoginAsync(client, teacher);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/polls",
+            new
+            {
+                Title = "Weight validation",
+                Kind = "test",
+                ResponseMode = "identified",
+                TestScale = 5,
+                Questions = new[]
+                {
+                    new
+                    {
+                        Text = "Question",
+                        Type = "single_choice",
+                        Options = new[] { "A", "B" },
+                        Weight = weight,
+                        CorrectOptionIndexes = new[] { 0 }
+                    }
+                }
+            });
+
+        Assert.Equal(expectedStatus, response.StatusCode);
+        if (expectedStatus == HttpStatusCode.BadRequest)
+        {
+            Assert.Equal("application/problem+json",
+                response.Content.Headers.ContentType?.MediaType);
+        }
+    }
+
     [Fact]
     public async Task PublicSubmission_IsSeparateAtomicIdempotentAndKeepsPrivateRubricPrivate()
     {
@@ -105,16 +154,28 @@ public sealed class TestModeEndpointsTests : IAsyncLifetime
         await LoginAsync(adminClient, admin);
         PollResponse test = await CreateAsync(ownerClient, TestRequest(10));
         await PublishAsync(ownerClient, test.Id);
+        PollResponse sessionSurvey = await CreateAsync(ownerClient, new
+        {
+            Question = "Survey session",
+            Options = new[] { "Yes", "No" }
+        });
+        await PublishAsync(ownerClient, sessionSurvey.Id);
 
         using HttpClient publicClient = _factory.CreateHttpsClient();
-        string publicJson = await publicClient.GetStringAsync($"/api/public/polls/{test.Id}");
-        PublicPollResponse publicPoll = (await publicClient.GetFromJsonAsync<PublicPollResponse>(
-            $"/api/public/polls/{test.Id}"))!;
+        HttpResponseMessage publicResponse =
+            await publicClient.GetAsync($"/api/public/polls/{test.Id}");
+        string publicJson = await publicResponse.Content.ReadAsStringAsync();
+        PublicPollResponse publicPoll = (await publicResponse.Content
+            .ReadFromJsonAsync<PublicPollResponse>())!;
         Assert.Equal("test", publicPoll.Kind);
+        Assert.False(publicResponse.Headers.Contains("Set-Cookie"));
         Assert.DoesNotContain("correctOption", publicJson, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("expectedAnswer", publicJson, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("gradingCriteria", publicJson, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("weight", publicJson, StringComparison.OrdinalIgnoreCase);
+        HttpResponseMessage surveyGet =
+            await publicClient.GetAsync($"/api/public/polls/{sessionSurvey.Id}");
+        Assert.True(surveyGet.Headers.Contains("Set-Cookie"));
 
         Guid requestId = Guid.NewGuid();
         object validBody = SubmissionBody(publicPoll, requestId, includeExtraMultiple: false);
@@ -432,7 +493,6 @@ public sealed class TestModeEndpointsTests : IAsyncLifetime
             })
         };
         request.Headers.Add("X-AnonPulse-Vote", "1");
-        await client.GetAsync($"/api/public/polls/{pollId}");
         return await client.SendAsync(request);
     }
 

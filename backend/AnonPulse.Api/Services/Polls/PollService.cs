@@ -617,6 +617,11 @@ public sealed class PollService(
             {
                 errors[weightKey] = ["Weight must be greater than 0 and at most 10000."];
             }
+            else if (decimal.Round(weight.Value, 2) != weight.Value)
+            {
+                errors[weightKey] =
+                    ["Weight must have at most 2 decimal places."];
+            }
             if (correctIndexes.Distinct().Count() != correctIndexes.Length)
             {
                 errors[correctKey] = ["CorrectOptionIndexes must be unique."];
