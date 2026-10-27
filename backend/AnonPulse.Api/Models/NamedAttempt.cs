@@ -17,8 +17,11 @@ public sealed class NamedAttempt
     public decimal? NormalizedScore { get; set; }
     public bool IsFullyGraded { get; set; }
     public bool IsFinal { get; set; }
+    public Guid? FinalizedByUserId { get; set; }
+    public DateTime? FinalizedAt { get; set; }
     public Poll Poll { get; set; } = null!;
     public ICollection<NamedAttemptAnswer> Answers { get; } = [];
+    public ICollection<TestGradeChange> GradeChanges { get; } = [];
 }
 
 public static class NamedAttemptStates

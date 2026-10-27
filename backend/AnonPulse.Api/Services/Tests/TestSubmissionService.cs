@@ -88,9 +88,6 @@ public sealed class TestSubmissionService(
 
             string secret = WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(32));
             DateTime now = timeProvider.GetUtcNow().UtcDateTime;
-            decimal maximum = questions.Sum(GetMaximumScore);
-            decimal rawScore = 0m;
-            bool fullyGraded = true;
             var attempt = new NamedAttempt
             {
                 Id = Guid.NewGuid(),
@@ -103,7 +100,7 @@ public sealed class TestSubmissionService(
                 State = NamedAttemptStates.Completed,
                 CreatedAt = now,
                 CompletedAt = now,
-                MaximumScore = maximum,
+                MaximumScore = questions.Sum(GetMaximumScore),
                 IsFinal = false
             };
 
@@ -123,7 +120,6 @@ public sealed class TestSubmissionService(
                 {
                     stored.GradingState = TestAnswerGradingStates.Pending;
                     stored.Score = null;
-                    fullyGraded = false;
                 }
                 else
                 {
@@ -132,7 +128,6 @@ public sealed class TestSubmissionService(
                     bool correct = expected.SetEquals(answer.OptionIds);
                     stored.GradingState = TestAnswerGradingStates.AutoGraded;
                     stored.Score = correct ? maxScore : 0m;
-                    rawScore += stored.Score.Value;
                     foreach (Guid optionId in answer.OptionIds)
                     {
                         stored.SelectedOptions.Add(new NamedAttemptAnswerOption
@@ -145,12 +140,7 @@ public sealed class TestSubmissionService(
                 attempt.Answers.Add(stored);
             }
 
-            attempt.RawScore = rawScore;
-            attempt.IsFullyGraded = fullyGraded;
-            attempt.NormalizedScore = fullyGraded
-                ? decimal.Round(rawScore / maximum * poll.TestScale!.Value, 2,
-                    MidpointRounding.AwayFromZero)
-                : null;
+            TestScoreCalculator.Recalculate(attempt, poll.TestScale!.Value);
             dbContext.NamedAttempts.Add(attempt);
             await dbContext.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);

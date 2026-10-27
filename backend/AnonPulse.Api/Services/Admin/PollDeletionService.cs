@@ -109,6 +109,9 @@ public sealed class PollDeletionService(
         await dbContext.NamedAttemptAnswerOptions
             .Where(selection => selection.Answer.Attempt.PollId == pollId)
             .ExecuteDeleteAsync(cancellationToken);
+        await dbContext.TestGradeChanges
+            .Where(change => change.Attempt.PollId == pollId)
+            .ExecuteDeleteAsync(cancellationToken);
         await dbContext.NamedAttemptAnswers
             .Where(answer => answer.Attempt.PollId == pollId)
             .ExecuteDeleteAsync(cancellationToken);

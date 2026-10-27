@@ -18,4 +18,5 @@ public static class TestAnswerGradingStates
 {
     public const string AutoGraded = "auto_graded";
     public const string Pending = "pending";
+    public const string TeacherGraded = "teacher_graded";
 }

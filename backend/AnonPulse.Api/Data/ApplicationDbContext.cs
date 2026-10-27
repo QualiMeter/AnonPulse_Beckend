@@ -58,6 +58,8 @@ public class ApplicationDbContext
     public DbSet<NamedAttemptAnswerOption> NamedAttemptAnswerOptions =>
         Set<NamedAttemptAnswerOption>();
 
+    public DbSet<TestGradeChange> TestGradeChanges => Set<TestGradeChange>();
+
     public DbSet<Decision> Decisions => Set<Decision>();
 
     public DbSet<AdminAuditEvent> AdminAuditEvents => Set<AdminAuditEvent>();

@@ -195,7 +195,7 @@ public sealed class KnowledgeGradingService(
             item.AnswerId, item.SuggestedScore, item.MaxScore, item.Explanation,
             ParseArray(item.CorrectPointsJson), ParseArray(item.MissingOrIncorrectPointsJson),
             item.NeedsReview, ParseArray(item.ReviewReasonsJson), job.Model,
-            job.AlgorithmVersion)).ToArray();
+            job.AlgorithmVersion, item.Id)).ToArray();
         return new(KnowledgeGradingOutcome.Succeeded, Results:
             new(job.Id, job.Model, job.AlgorithmVersion, items, page, pageSize, total,
                 total == 0 ? 0 : ((total - 1) / pageSize) + 1));

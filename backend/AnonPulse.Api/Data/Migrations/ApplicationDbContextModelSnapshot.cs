@@ -17,7 +17,7 @@ namespace AnonPulse.Api.Data.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.12")
+                .HasAnnotation("ProductVersion", "10.0.14")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -341,6 +341,14 @@ namespace AnonPulse.Api.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<DateTime?>("FinalizedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("finalized_at");
+
+                    b.Property<Guid?>("FinalizedByUserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("finalized_by_user_id");
+
                     b.Property<bool>("IsFinal")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("boolean")
@@ -401,11 +409,11 @@ namespace AnonPulse.Api.Data.Migrations
 
                     b.ToTable("named_attempts", null, t =>
                         {
+                            t.HasCheckConstraint("ck_named_attempts_finalization", "(is_final = false AND finalized_by_user_id IS NULL AND finalized_at IS NULL) OR (is_final = true AND is_fully_graded = true AND normalized_score IS NOT NULL AND finalized_by_user_id IS NOT NULL AND finalized_at IS NOT NULL)");
+
                             t.HasCheckConstraint("ck_named_attempts_group", "btrim(respondent_group) <> ''");
 
                             t.HasCheckConstraint("ck_named_attempts_name", "btrim(respondent_name) <> ''");
-
-                            t.HasCheckConstraint("ck_named_attempts_not_final", "is_final = false");
 
                             t.HasCheckConstraint("ck_named_attempts_request_hash", "length(request_hash) = 64");
 
@@ -452,6 +460,9 @@ namespace AnonPulse.Api.Data.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasAlternateKey("AttemptId", "Id")
+                        .HasName("ak_named_attempt_answers_attempt_id_id");
+
                     b.HasIndex("QuestionId");
 
                     b.HasIndex("AttemptId", "QuestionId")
@@ -460,9 +471,9 @@ namespace AnonPulse.Api.Data.Migrations
 
                     b.ToTable("named_attempt_answers", null, t =>
                         {
-                            t.HasCheckConstraint("ck_named_attempt_answers_grading_state", "grading_state IN ('auto_graded', 'pending')");
+                            t.HasCheckConstraint("ck_named_attempt_answers_grading_state", "grading_state IN ('auto_graded', 'pending', 'teacher_graded')");
 
-                            t.HasCheckConstraint("ck_named_attempt_answers_score", "maximum_score > 0 AND ((grading_state = 'auto_graded' AND score IS NOT NULL AND score >= 0 AND score <= maximum_score) OR (grading_state = 'pending' AND score IS NULL))");
+                            t.HasCheckConstraint("ck_named_attempt_answers_score", "maximum_score > 0 AND ((grading_state IN ('auto_graded', 'teacher_graded') AND score IS NOT NULL AND score >= 0 AND score <= maximum_score) OR (grading_state = 'pending' AND score IS NULL))");
 
                             t.HasCheckConstraint("ck_named_attempt_answers_text", "text IS NULL OR btrim(text) <> ''");
                         });
@@ -1082,6 +1093,68 @@ namespace AnonPulse.Api.Data.Migrations
                         });
                 });
 
+            modelBuilder.Entity("AnonPulse.Api.Models.TestGradeChange", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("ActorId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("actor_id");
+
+                    b.Property<Guid>("AnswerId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("answer_id");
+
+                    b.Property<Guid>("AttemptId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("attempt_id");
+
+                    b.Property<DateTime>("ChangedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("changed_at");
+
+                    b.Property<Guid?>("KnowledgeGradingSuggestionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("knowledge_grading_suggestion_id");
+
+                    b.Property<decimal>("NewScore")
+                        .HasColumnType("numeric(10,2)")
+                        .HasColumnName("new_score");
+
+                    b.Property<decimal?>("OldScore")
+                        .HasColumnType("numeric(10,2)")
+                        .HasColumnName("old_score");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("source");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AnswerId")
+                        .HasDatabaseName("ix_test_grade_changes_answer_id");
+
+                    b.HasIndex("KnowledgeGradingSuggestionId")
+                        .HasDatabaseName("ix_test_grade_changes_suggestion_id");
+
+                    b.HasIndex("AttemptId", "AnswerId");
+
+                    b.HasIndex("AttemptId", "ChangedAt")
+                        .HasDatabaseName("ix_test_grade_changes_attempt_changed_at");
+
+                    b.ToTable("test_grade_changes", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_test_grade_changes_scores", "(old_score IS NULL OR old_score >= 0) AND new_score >= 0");
+
+                            t.HasCheckConstraint("ck_test_grade_changes_source", "source IN ('manual', 'ai_suggestion') AND ((source = 'manual' AND knowledge_grading_suggestion_id IS NULL) OR (source = 'ai_suggestion' AND knowledge_grading_suggestion_id IS NOT NULL))");
+                        });
+                });
+
             modelBuilder.Entity("AnonPulse.Api.Models.Vote", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1526,6 +1599,33 @@ namespace AnonPulse.Api.Data.Migrations
                     b.Navigation("Question");
                 });
 
+            modelBuilder.Entity("AnonPulse.Api.Models.TestGradeChange", b =>
+                {
+                    b.HasOne("AnonPulse.Api.Models.NamedAttempt", "Attempt")
+                        .WithMany("GradeChanges")
+                        .HasForeignKey("AttemptId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("AnonPulse.Api.Models.PollKnowledgeGradingSuggestion", "KnowledgeGradingSuggestion")
+                        .WithMany()
+                        .HasForeignKey("KnowledgeGradingSuggestionId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("AnonPulse.Api.Models.NamedAttemptAnswer", "Answer")
+                        .WithMany()
+                        .HasForeignKey("AttemptId", "AnswerId")
+                        .HasPrincipalKey("AttemptId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Answer");
+
+                    b.Navigation("Attempt");
+
+                    b.Navigation("KnowledgeGradingSuggestion");
+                });
+
             modelBuilder.Entity("AnonPulse.Api.Models.Vote", b =>
                 {
                     b.HasOne("AnonPulse.Api.Models.IdentifiedPollSubmission", "IdentifiedSubmission")
@@ -1629,6 +1729,8 @@ namespace AnonPulse.Api.Data.Migrations
             modelBuilder.Entity("AnonPulse.Api.Models.NamedAttempt", b =>
                 {
                     b.Navigation("Answers");
+
+                    b.Navigation("GradeChanges");
                 });
 
             modelBuilder.Entity("AnonPulse.Api.Models.NamedAttemptAnswer", b =>

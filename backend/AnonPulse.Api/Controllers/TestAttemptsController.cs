@@ -2,6 +2,7 @@ using System.Security.Claims;
 using AnonPulse.Api.Contracts.Admin;
 using AnonPulse.Api.Contracts.Polls;
 using AnonPulse.Api.Models;
+using AnonPulse.Api.Security;
 using AnonPulse.Api.Services.Tests;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -54,4 +55,83 @@ public sealed class TestAttemptsController(ITestAttemptService service) : Contro
             _ => throw new InvalidOperationException("Unknown test attempts outcome.")
         };
     }
+
+    [HttpPut("{attemptId:guid}/answers/{answerId:guid}/grade")]
+    [ValidateCsrfToken]
+    public async Task<ActionResult<GradeTestAnswerResponse>> Grade(
+        Guid pollId,
+        Guid attemptId,
+        Guid answerId,
+        GradeTestAnswerRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetActorId(out Guid actorId)) return Unauthorized();
+        TestAttemptOperationResult result = await service.GradeAsync(
+            actorId, User.IsInRole(RoleNames.Admin), pollId, attemptId, answerId,
+            request, cancellationToken);
+        return result.Outcome == TestAttemptOperationOutcome.Succeeded
+            ? Ok(result.Grade)
+            : MapError<GradeTestAnswerResponse>(result);
+    }
+
+    [HttpPost("{attemptId:guid}/finalize")]
+    [ValidateCsrfToken]
+    public async Task<ActionResult<FinalizeTestAttemptResponse>> FinalizeAttempt(
+        Guid pollId,
+        Guid attemptId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetActorId(out Guid actorId)) return Unauthorized();
+        TestAttemptOperationResult result = await service.FinalizeAsync(
+            actorId, User.IsInRole(RoleNames.Admin), pollId, attemptId,
+            cancellationToken);
+        return result.Outcome == TestAttemptOperationOutcome.Succeeded
+            ? Ok(result.Finalization)
+            : MapError<FinalizeTestAttemptResponse>(result);
+    }
+
+    [HttpGet("{attemptId:guid}/grade-history")]
+    public async Task<ActionResult<TestAttemptGradeHistoryResponse>> GetGradeHistory(
+        Guid pollId,
+        Guid attemptId,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetActorId(out Guid actorId)) return Unauthorized();
+        TestAttemptOperationResult result = await service.GetHistoryAsync(
+            actorId, User.IsInRole(RoleNames.Admin), pollId, attemptId,
+            cancellationToken);
+        return result.Outcome == TestAttemptOperationOutcome.Succeeded
+            ? Ok(result.History)
+            : MapError<TestAttemptGradeHistoryResponse>(result);
+    }
+
+    private ActionResult<T> MapError<T>(TestAttemptOperationResult result)
+    {
+        if (result.Outcome == TestAttemptOperationOutcome.Invalid)
+        {
+            return BadRequest(new ValidationProblemDetails(
+                result.ValidationErrors!.ToDictionary(item => item.Key, item => item.Value))
+            {
+                Status = StatusCodes.Status400BadRequest,
+                Title = result.Error,
+                Extensions = { ["code"] = result.ErrorCode }
+            });
+        }
+        int status = result.Outcome switch
+        {
+            TestAttemptOperationOutcome.NotFound => StatusCodes.Status404NotFound,
+            TestAttemptOperationOutcome.Forbidden => StatusCodes.Status403Forbidden,
+            TestAttemptOperationOutcome.Conflict => StatusCodes.Status409Conflict,
+            _ => throw new InvalidOperationException("Unknown test attempt outcome.")
+        };
+        return StatusCode(status, new ProblemDetails
+        {
+            Status = status,
+            Title = result.Error,
+            Extensions = { ["code"] = result.ErrorCode }
+        });
+    }
+
+    private bool TryGetActorId(out Guid actorId) => Guid.TryParse(
+        User.FindFirstValue(ClaimTypes.NameIdentifier), out actorId);
 }

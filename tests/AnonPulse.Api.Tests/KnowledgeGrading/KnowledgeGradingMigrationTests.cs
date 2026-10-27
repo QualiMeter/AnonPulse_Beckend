@@ -17,6 +17,7 @@ public sealed class KnowledgeGradingMigrationTests : IAsyncLifetime
 {
     private const string PreviousMigration = "20261026043614_AddTestModeAndNamedAttempts";
     private const string CurrentMigration = "20261026090737_AddKnowledgeGrading";
+    private const string LatestMigration = "20261027031338_FinalizeTestGrades";
     private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:18")
         .WithDatabase("anonpulse_knowledge_grading_tests")
         .WithUsername("anonpulse_tests")
@@ -189,6 +190,7 @@ public sealed class KnowledgeGradingMigrationTests : IAsyncLifetime
 
         await using (var deleteDb = new ApplicationDbContext(dbOptions))
         {
+            await deleteDb.Database.GetService<IMigrator>().MigrateAsync(LatestMigration);
             PollDeletionResult deleted = await new PollDeletionService(deleteDb,
                 TimeProvider.System).DeleteAdminAsync(owner, poll, true, default);
             Assert.Equal(PollDeletionOutcome.Succeeded, deleted.Outcome);

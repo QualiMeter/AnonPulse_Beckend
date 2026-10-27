@@ -123,6 +123,7 @@ GET /api/polls/{pollId}/questions/{questionId}/knowledge-grading/results?page=1&
   "model": "openai/gpt-oss-20b",
   "algorithmVersion": "knowledge-v1",
   "items": [{
+    "suggestionId": "55555555-5555-5555-5555-555555555555",
     "answerId": "44444444-4444-4444-4444-444444444444",
     "suggestedScore": 4,
     "maxScore": 5,
@@ -145,6 +146,9 @@ GET /api/polls/{pollId}/questions/{questionId}/knowledge-grading/results?page=1&
 уверенности и не автоматический ноль. ФИО и группа не дублируются в ИИ-таблице. Интерфейс может
 сопоставить ответ с защищёнными данными через существующий список попыток. Публичного маршрута
 оценок нет.
+
+`suggestionId` передаётся в явном запросе принятия предложения; `answerId` идентифицирует ответ.
+Само получение предложения не меняет балл.
 
 ## Очередь, ошибки и бюджет
 
