@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AnonPulse.Api.Data;
 using AnonPulse.Api.Contracts.KnowledgeGrading;
 using AnonPulse.Api.Models;
@@ -44,8 +45,18 @@ public sealed class KnowledgeGradingServiceTests
         Assert.Equal(KnowledgeGradingOutcome.Succeeded, first.Outcome);
         Assert.Equal(first.Job!.Id, second.Job!.Id);
         PollKnowledgeGradingJob job = Assert.Single(db.PollKnowledgeGradingJobs);
-        Assert.DoesNotContain("test@example.org", job.AnswersSnapshotJson);
-        Assert.DoesNotContain("912", job.AnswersSnapshotJson);
+        using JsonDocument snapshot = JsonDocument.Parse(job.AnswersSnapshotJson);
+        Assert.Equal(JsonValueKind.Array, snapshot.RootElement.ValueKind);
+        JsonElement answer = Assert.Single(snapshot.RootElement.EnumerateArray());
+        string sanitizedText = answer
+            .GetProperty("text")
+            .GetString()!;
+
+        Assert.DoesNotContain("test@example.org", sanitizedText);
+        Assert.DoesNotContain("+7 912 123-45-67", sanitizedText);
+        Assert.Contains("[email удалён]", sanitizedText);
+        Assert.Contains("[телефон удалён]", sanitizedText);
+
         Assert.Equal("openai/gpt-oss-20b", job.Model);
         Assert.Equal("knowledge-v1", job.AlgorithmVersion);
         Assert.True(job.ReservedInputTokens > 0);

@@ -145,6 +145,49 @@ public sealed class PollDraftEditingEndpointsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SurveyKnowledgeReplacement_ReturnsBadRequestWithoutPartialChanges()
+    {
+        SeededUser owner = await CreateUserAsync(RoleNames.Teacher);
+        using HttpClient client = _factory.CreateHttpsClient();
+        await LoginAsync(client, owner);
+        PollResponse original = await CreateDraftAsync(client, "Stable survey question");
+
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            $"/api/polls/{original.Id}",
+            new
+            {
+                Title = "Must not persist",
+                Kind = "survey",
+                Questions = new[]
+                {
+                    new
+                    {
+                        Text = "Explain the concept",
+                        Type = "text",
+                        TextPurpose = "knowledge",
+                        Options = Array.Empty<string>(),
+                        KnowledgeSettings = new
+                        {
+                            ExpectedAnswer = "Expected answer",
+                            GradingCriteria = "Grading criteria",
+                            MaxScore = 5
+                        }
+                    }
+                }
+            });
+        PollResponse? unchanged = await client.GetFromJsonAsync<PollResponse>(
+            $"/api/polls/{original.Id}");
+
+        AssertProblem(response, HttpStatusCode.BadRequest);
+        Assert.NotNull(unchanged);
+        Assert.Equal(original.Title, unchanged.Title);
+        Assert.Equal(original.Questions.Select(question => question.Id),
+            unchanged.Questions.Select(question => question.Id));
+        Assert.Equal(original.Questions.Select(question => question.Text),
+            unchanged.Questions.Select(question => question.Text));
+    }
+
+    [Fact]
     public async Task OpenAndClosedPolls_CannotBeEdited()
     {
         SeededUser owner = await CreateUserAsync(RoleNames.Teacher);

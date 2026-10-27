@@ -111,35 +111,54 @@ public sealed class PollEndpointsTests
     }
 
     [Fact]
-    public async Task Create_MixedPoll_ReturnsTypesAndKeepsKnowledgeSettingsPrivateFromPublicApi()
+    public async Task Create_TestWithKnowledge_PersistsQuestionSettings()
     {
         await using var factory = new AuthWebApplicationFactory();
         SeededUser teacher = await factory.CreateTeacherAsync();
         using HttpClient client = factory.CreateHttpsClient();
         await LoginAsync(client, teacher);
+
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/polls", new
         {
-            title = "Mixed",
+            title = "Knowledge test",
+            kind = "test",
+            responseMode = "identified",
+            testScale = 10,
             questions = new object[]
             {
-                new { text = "Choice", type = "single_choice", options = new[] { "A", "B" } },
-                new { text = "Feedback", type = "text", textPurpose = "feedback", options = Array.Empty<string>() },
                 new
                 {
-                    text = "Knowledge", type = "text", textPurpose = "knowledge",
-                    knowledgeSettings = new { expectedAnswer = "Expected", gradingCriteria = "Criteria", maxScore = 10 }
+                    text = "Choice",
+                    type = "single_choice",
+                    options = new[] { "A", "B" },
+                    weight = 2,
+                    correctOptionIndexes = new[] { 0 }
+                },
+                new
+                {
+                    text = "Knowledge",
+                    type = "text",
+                    textPurpose = "knowledge",
+                    knowledgeSettings = new
+                    {
+                        expectedAnswer = "Expected",
+                        gradingCriteria = "Criteria",
+                        maxScore = 10
+                    }
                 }
             }
         });
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         PollResponse poll = (await response.Content.ReadFromJsonAsync<PollResponse>())!;
-        Assert.Equal(["single_choice", "text", "text"], poll.Questions.Select(q => q.Type));
+        Assert.Equal("test", poll.Kind);
+        Assert.Equal(["single_choice", "text"], poll.Questions.Select(q => q.Type));
         Assert.Empty(poll.Questions[1].Options);
-        Assert.NotNull(poll.Questions[2].KnowledgeSettings);
+        Assert.NotNull(poll.Questions[1].KnowledgeSettings);
         using IServiceScope scope = factory.Services.CreateScope();
-        ApplicationDbContext db = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
-        Assert.Equal(2, db.PollQuestions.Count(q => q.Type == PollQuestionType.Text));
+        ApplicationDbContext db =
+            scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        Assert.Single(db.PollQuestions.Where(q => q.Type == PollQuestionType.Text));
         Assert.Single(db.PollQuestionKnowledgeSettings);
     }
 
@@ -172,6 +191,9 @@ public sealed class PollEndpointsTests
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/polls", new
         {
+            kind = "test",
+            responseMode = "identified",
+            testScale = 10,
             questions = new[]
             {
                 new

@@ -572,6 +572,12 @@ public sealed class PollService(
             {
                 errors[purposeKey] = ["A test text question must use textPurpose 'knowledge'."];
             }
+            if (kind == PollKind.Survey &&
+                resolvedPurpose == TextQuestionPurpose.Knowledge)
+            {
+                errors[purposeKey] =
+                    ["A survey text question must use textPurpose 'feedback'."];
+            }
         }
         else
         {
@@ -723,7 +729,9 @@ public sealed class PollService(
             (question.Type == PollQuestionType.Text
                 ? question.TextPurpose is not null && question.Options.Count == 0 &&
                   (question.TextPurpose != TextQuestionPurpose.Knowledge ||
-                   question.KnowledgeSettings is not null)
+                   question.KnowledgeSettings is not null) &&
+                  (poll.Kind != PollKind.Survey ||
+                   question.TextPurpose == TextQuestionPurpose.Feedback)
                 : question.Options.Count >= 2 &&
                   question.Options.All(option => !string.IsNullOrWhiteSpace(option.Text)) &&
                   question.Options.Select(option => NormalizeWhitespace(option.Text))

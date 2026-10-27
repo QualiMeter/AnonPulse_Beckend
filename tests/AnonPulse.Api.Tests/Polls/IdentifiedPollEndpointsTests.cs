@@ -442,16 +442,10 @@ public sealed class IdentifiedPollEndpointsTests : IAsyncLifetime
             new { Text = "Feedback", Type = "text", TextPurpose = "feedback", Options = Array.Empty<string>() },
             new
             {
-                Text = "Knowledge",
+                Text = "Additional feedback",
                 Type = "text",
-                TextPurpose = "knowledge",
-                Options = Array.Empty<string>(),
-                KnowledgeSettings = new
-                {
-                    ExpectedAnswer = "Expected",
-                    GradingCriteria = "Criteria",
-                    MaxScore = 10
-                }
+                TextPurpose = "feedback",
+                Options = Array.Empty<string>()
             }
         }
     };
