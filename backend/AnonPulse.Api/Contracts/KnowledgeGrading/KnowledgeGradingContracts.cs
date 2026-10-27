@@ -39,4 +39,5 @@ public sealed record KnowledgeGradingSuggestionResponse(
     bool NeedsReview,
     IReadOnlyList<string> ReviewReasons,
     string Model,
-    string AlgorithmVersion);
+    string AlgorithmVersion,
+    Guid SuggestionId);

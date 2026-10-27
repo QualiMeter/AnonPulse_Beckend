@@ -111,6 +111,7 @@ builder.Services.AddScoped<IPollTextAnswerService, PollTextAnswerService>();
 builder.Services.AddScoped<IPollSubmissionService, PollSubmissionService>();
 builder.Services.AddScoped<ITestSubmissionService, TestSubmissionService>();
 builder.Services.AddScoped<ITestAttemptService, TestAttemptService>();
+builder.Services.AddScoped<IPublicTestResultService, PublicTestResultService>();
 builder.Services.AddScoped<IFeedbackAnalysisService, FeedbackAnalysisService>();
 builder.Services.AddScoped<IFeedbackAnalysisJobProcessor, FeedbackAnalysisJobProcessor>();
 builder.Services.AddScoped<IFeedbackAnalysisJobQueue, FeedbackAnalysisJobQueue>();
@@ -208,6 +209,13 @@ builder.Services.AddOptions<TestSubmissionRateLimitOptions>()
     .Validate(options => options.RequestsPerClient is > 0 and <= 10_000,
         "Test submission rate limit must be between 1 and 10000 requests per window.")
     .ValidateOnStart();
+builder.Services.AddOptions<TestResultRateLimitOptions>()
+    .Bind(builder.Configuration.GetSection(TestResultRateLimitOptions.SectionName))
+    .Validate(options => options.RateLimitWindow > TimeSpan.Zero,
+        "Test result rate-limit window must be greater than zero.")
+    .Validate(options => options.RequestsPerClient is > 0 and <= 10_000,
+        "Test result rate limit must be between 1 and 10000 requests per window.")
+    .ValidateOnStart();
 builder.Services.AddRateLimiter(rateLimiterOptions =>
 {
     int permitLimit = builder.Configuration.GetValue<int?>(
@@ -242,6 +250,25 @@ builder.Services.AddRateLimiter(rateLimiterOptions =>
             {
                 PermitLimit = testPermitLimit,
                 Window = testWindow,
+                QueueLimit = 0,
+                AutoReplenishment = true
+            });
+    });
+    int resultPermitLimit = builder.Configuration.GetValue<int?>(
+        $"{TestResultRateLimitOptions.SectionName}:RequestsPerClient") ?? 30;
+    TimeSpan resultWindow = builder.Configuration.GetValue<TimeSpan?>(
+        $"{TestResultRateLimitOptions.SectionName}:RateLimitWindow") ??
+        TimeSpan.FromMinutes(1);
+    rateLimiterOptions.AddPolicy("public-test-results", context =>
+    {
+        string peerAddress = context.Connection.RemoteIpAddress?.ToString() ??
+                             "unknown-peer";
+        return RateLimitPartition.GetFixedWindowLimiter(
+            $"public-test-results:{peerAddress}",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = resultPermitLimit,
+                Window = resultWindow,
                 QueueLimit = 0,
                 AutoReplenishment = true
             });

@@ -18,7 +18,10 @@ public sealed class NamedAttemptConfiguration : IEntityTypeConfiguration<NamedAt
             table.HasCheckConstraint("ck_named_attempts_scores",
                 "raw_score >= 0 AND maximum_score > 0 AND raw_score <= maximum_score AND " +
                 "(normalized_score IS NULL OR normalized_score >= 0)");
-            table.HasCheckConstraint("ck_named_attempts_not_final", "is_final = false");
+            table.HasCheckConstraint("ck_named_attempts_finalization",
+                "(is_final = false AND finalized_by_user_id IS NULL AND finalized_at IS NULL) OR " +
+                "(is_final = true AND is_fully_graded = true AND normalized_score IS NOT NULL AND " +
+                "finalized_by_user_id IS NOT NULL AND finalized_at IS NOT NULL)");
         });
         builder.HasKey(item => item.Id);
         builder.Property(item => item.Id).HasColumnName("id");
@@ -36,6 +39,9 @@ public sealed class NamedAttemptConfiguration : IEntityTypeConfiguration<NamedAt
         builder.Property(item => item.NormalizedScore).HasColumnName("normalized_score").HasColumnType("numeric(10,2)");
         builder.Property(item => item.IsFullyGraded).HasColumnName("is_fully_graded");
         builder.Property(item => item.IsFinal).HasColumnName("is_final").HasDefaultValue(false);
+        builder.Property(item => item.FinalizedByUserId).HasColumnName("finalized_by_user_id");
+        builder.Property(item => item.FinalizedAt).HasColumnName("finalized_at")
+            .HasColumnType("timestamp with time zone");
         builder.HasIndex(item => new { item.PollId, item.ClientRequestId })
             .IsUnique().HasDatabaseName("ux_named_attempts_poll_id_client_request_id");
         builder.HasIndex(item => item.PollId);

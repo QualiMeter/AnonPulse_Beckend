@@ -172,7 +172,10 @@ public sealed class TestModeMigrationTests : IAsyncLifetime
             report.RootElement.GetProperty("summary").GetString());
         Assert.Equal(completedAt, analysis.CompletedAt);
         Assert.Equal(1, analysis.AnswerCount);
-        Assert.Empty(verify.NamedAttempts);
+        int namedAttemptCount = await verify.Database.SqlQueryRaw<int>(
+                "SELECT COUNT(*)::int AS \"Value\" FROM named_attempts")
+            .SingleAsync();
+        Assert.Equal(0, namedAttemptCount);
         Assert.Empty(verify.PollQuestionCorrectOptions);
     }
 
