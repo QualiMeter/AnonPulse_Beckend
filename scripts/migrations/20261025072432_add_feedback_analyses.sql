@@ -57,7 +57,7 @@ DO $EF$
 BEGIN
     IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261025072432_AddFeedbackAnalyses') THEN
     INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
-    VALUES ('20261025072432_AddFeedbackAnalyses', '10.0.12');
+    VALUES ('20261025072432_AddFeedbackAnalyses', '10.0.14');
     END IF;
 END $EF$;
 COMMIT;

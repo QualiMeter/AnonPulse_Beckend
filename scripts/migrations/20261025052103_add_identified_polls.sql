@@ -174,7 +174,7 @@ DO $EF$
 BEGIN
     IF NOT EXISTS(SELECT 1 FROM "__EFMigrationsHistory" WHERE "MigrationId" = '20261025052103_AddIdentifiedPolls') THEN
     INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
-    VALUES ('20261025052103_AddIdentifiedPolls', '10.0.12');
+    VALUES ('20261025052103_AddIdentifiedPolls', '10.0.14');
     END IF;
 END $EF$;
 COMMIT;
