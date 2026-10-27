@@ -52,4 +52,6 @@ public sealed class PollQuestion
     public ICollection<PollQuestionCorrectOption> CorrectOptions { get; } = [];
 
     public ICollection<PollFeedbackAnalysis> FeedbackAnalyses { get; } = [];
+
+    public ICollection<PollKnowledgeGradingJob> KnowledgeGradingJobs { get; } = [];
 }

@@ -24,7 +24,7 @@ jobs:
       - name: Set up .NET 10
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 10.0.403
 
       - name: Restore dependencies
         run: dotnet restore AnonPulse.slnx

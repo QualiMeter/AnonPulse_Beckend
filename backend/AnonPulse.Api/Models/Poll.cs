@@ -37,4 +37,6 @@ public sealed class Poll
     public Decision? Decision { get; set; }
 
     public ICollection<PollFeedbackAnalysis> FeedbackAnalyses { get; } = [];
+
+    public ICollection<PollKnowledgeGradingJob> KnowledgeGradingJobs { get; } = [];
 }

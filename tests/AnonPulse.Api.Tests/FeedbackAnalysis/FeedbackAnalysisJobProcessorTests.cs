@@ -22,7 +22,7 @@ public sealed class FeedbackAnalysisJobProcessorTests
         await db.SaveChangesAsync();
         var fake = new FakeProvider(input => Success(input));
 
-        await CreateProcessor(db, fake).ProcessAsync(analysis.Id, default);
+        await CreateProcessor(db, fake).ProcessAsync(Lease(analysis), default);
 
         FeedbackInputAnswer sent = Assert.Single(fake.LastInput!.Answers);
         Assert.DoesNotContain("ivan@example.org", sent.Text);
@@ -50,7 +50,7 @@ public sealed class FeedbackAnalysisJobProcessorTests
                 [input.Answers[0].TemporaryId, input.Answers[1].TemporaryId, input.Answers[0].TemporaryId])],
                 [], []), 10, 20)));
 
-        await CreateProcessor(db, fake).ProcessAsync(analysis.Id, default);
+        await CreateProcessor(db, fake).ProcessAsync(Lease(analysis), default);
 
         string json = analysis.ReportJson!;
         Assert.Contains("\"mentionCount\":2", json);
@@ -72,7 +72,7 @@ public sealed class FeedbackAnalysisJobProcessorTests
             new ProviderReport("Итог", [new("Тема", "Описание", "problem", ["invented-id"])],
                 [], []), null, null)));
 
-        await CreateProcessor(db, fake).ProcessAsync(analysis.Id, default);
+        await CreateProcessor(db, fake).ProcessAsync(Lease(analysis), default);
 
         Assert.Equal(FeedbackAnalysisStatus.Failed, analysis.Status);
         Assert.Equal("invalid_provider_response", analysis.ErrorCode);
@@ -91,14 +91,16 @@ public sealed class FeedbackAnalysisJobProcessorTests
             "free_quota_exhausted", true, TimeSpan.FromMinutes(2)));
         DateTime before = DateTime.UtcNow;
 
-        await CreateProcessor(db, fake).ProcessAsync(analysis.Id, default);
+        await CreateProcessor(db, fake).ProcessAsync(Lease(analysis), default);
 
         Assert.Equal(FeedbackAnalysisStatus.Pending, analysis.Status);
         Assert.True(analysis.NextAttemptAt >= before.AddMinutes(2));
         analysis.Status = FeedbackAnalysisStatus.Processing;
         analysis.Attempts = 3;
+        analysis.LeaseId = Guid.NewGuid();
+        analysis.LeaseGeneration++;
         await db.SaveChangesAsync();
-        await CreateProcessor(db, fake).ProcessAsync(analysis.Id, default);
+        await CreateProcessor(db, fake).ProcessAsync(Lease(analysis), default);
         Assert.Equal(FeedbackAnalysisStatus.Failed, analysis.Status);
         Assert.True(analysis.NextAttemptAt >= before.AddMinutes(2));
         Assert.Equal(2, fake.Calls);
@@ -114,7 +116,8 @@ public sealed class FeedbackAnalysisJobProcessorTests
             question.Id, FeedbackAnalysisStatus.Processing);
         await db.SaveChangesAsync();
 
-        await CreateProcessor(db, new NeverCompletingProvider()).ProcessAsync(analysis.Id, default);
+        await CreateProcessor(db, new NeverCompletingProvider()).ProcessAsync(
+            Lease(analysis), default);
 
         Assert.Equal(FeedbackAnalysisStatus.Pending, analysis.Status);
         Assert.Equal("provider_timeout", analysis.ErrorCode);
@@ -135,7 +138,8 @@ public sealed class FeedbackAnalysisJobProcessorTests
                 question.Id, FeedbackAnalysisStatus.Processing);
             await db.SaveChangesAsync();
             analysisId = analysis.Id;
-            await CreateProcessor(db, new FakeProvider(Success)).ProcessAsync(analysisId, default);
+            await CreateProcessor(db, new FakeProvider(Success)).ProcessAsync(
+                Lease(analysis), default);
         }
         await using var restarted = new ApplicationDbContext(options);
         PollFeedbackAnalysis stored = await restarted.PollFeedbackAnalyses.SingleAsync(x => x.Id == analysisId);
@@ -149,9 +153,22 @@ public sealed class FeedbackAnalysisJobProcessorTests
             [new("Действие", "Описание", "medium")], ["Возможна неточность."]), 1, 1));
 
     private static FeedbackAnalysisJobProcessor CreateProcessor(ApplicationDbContext db,
-        IFeedbackAnalysisProvider provider) => new(db, provider, new PersonalDataSanitizer(),
-        Options.Create(new AiOptions { Enabled = true, MaxRetries = 2, TimeoutSeconds = 2 }),
-        TimeProvider.System, NullLogger<FeedbackAnalysisJobProcessor>.Instance);
+        IFeedbackAnalysisProvider provider)
+    {
+        var settings = Options.Create(new AiOptions
+        {
+            Enabled = true,
+            MaxRetries = 2,
+            TimeoutSeconds = 2,
+            SharedTokenBudget = 100_000
+        });
+        return new(db, provider, new PersonalDataSanitizer(),
+            new AiTokenBudgetManager(db, settings, TimeProvider.System), settings,
+            TimeProvider.System, NullLogger<FeedbackAnalysisJobProcessor>.Instance);
+    }
+
+    private static FeedbackAnalysisLease Lease(PollFeedbackAnalysis analysis) => new(
+        analysis.Id, analysis.LeaseId!.Value, analysis.LeaseGeneration);
 
     private static ApplicationDbContext CreateDb() => new(
         new DbContextOptionsBuilder<ApplicationDbContext>()

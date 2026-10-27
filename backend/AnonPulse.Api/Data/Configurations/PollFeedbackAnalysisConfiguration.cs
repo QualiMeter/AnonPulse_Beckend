@@ -39,6 +39,8 @@ public sealed class PollFeedbackAnalysisConfiguration
         builder.Property(item => item.ErrorCode).HasColumnName("error_code").HasMaxLength(64);
         builder.Property(item => item.PromptTokens).HasColumnName("prompt_tokens");
         builder.Property(item => item.CompletionTokens).HasColumnName("completion_tokens");
+        builder.Property(item => item.LeaseId).HasColumnName("lease_id");
+        builder.Property(item => item.LeaseGeneration).HasColumnName("lease_generation");
         builder.HasIndex(item => new { item.QuestionId, item.AnswerFingerprint })
             .IsUnique().HasDatabaseName("ux_feedback_analyses_question_fingerprint");
         builder.HasIndex(item => new { item.Status, item.NextAttemptAt, item.CreatedAt })
